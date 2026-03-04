@@ -1,0 +1,15 @@
+{
+  "client_id": "<YOUR_CLIENT_ID>",
+  "client_secret": "<YOUR_CLIENT_SECRET>",
+  "environment": "prod",
+  "locale": {
+    "site": "US",
+    "language": "en",
+    "currency": "USD",
+    "ship_to_country": "us"
+  },
+  "tokens": {
+    "access_token": "",
+    "refresh_token": ""
+  }
+}
