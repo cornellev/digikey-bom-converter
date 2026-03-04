@@ -1,7 +1,13 @@
-import { useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { BOMTable, BOMItem } from './components/BOMTable';
-import { parseFile, convertBOM, exportToExcel, exportToCSV } from './utils/BOMConverter';
+import {
+  AuthStatus,
+  convertBOMViaBackend,
+  exportToExcel,
+  exportToCSV,
+  fetchAuthStatus,
+} from './utils/BOMConverter';
 import { Button } from './components/ui/button';
 import { RefreshCw, AlertCircle, Sparkles } from 'lucide-react';
 import { Alert, AlertDescription } from './components/ui/alert';
@@ -12,6 +18,26 @@ function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  const refreshAuthStatus = async () => {
+    try {
+      const status = await fetchAuthStatus();
+      setAuthStatus(status);
+    } catch {
+      setAuthStatus(null);
+      setError('Could not reach backend. Make sure backend is running on http://localhost:8000.');
+    } finally {
+      setIsCheckingAuth(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshAuthStatus();
+  }, []);
+
+  const serviceReady = Boolean(authStatus?.configured && authStatus?.has_refresh_token);
 
   const handleFileSelect = (file: File) => {
     setUploadedFile(file);
@@ -22,19 +48,24 @@ function App() {
   const handleConvert = async () => {
     if (!uploadedFile) return;
 
+    if (!authStatus?.configured) {
+      setError('Not connected to the DigiKey API: service credentials are not configured yet.');
+      return;
+    }
+
+    if (!authStatus.has_refresh_token) {
+      setError('Not connected to the DigiKey API: backend authorization is missing.');
+      return;
+    }
+
     setIsProcessing(true);
     setError(null);
 
     try {
-      // Parse the file
-      const rawData = await parseFile(uploadedFile);
-      
-      if (rawData.length === 0) {
+      const convertedData = await convertBOMViaBackend(uploadedFile);
+      if (convertedData.length === 0) {
         throw new Error('No data found in the uploaded file.');
       }
-
-      // Convert to Digi-Key format
-      const convertedData = convertBOM(rawData);
       setBomData(convertedData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process file.');
@@ -80,11 +111,29 @@ function App() {
             DigiKey BOM Converter
           </h1>
           <p className="mt-3 max-w-2xl text-base text-[#3b3f47] md:text-lg">
-            Convert an Altium-exported BOM into a DigiKey-compatible BOM! 
+            Convert an Altium-exported BOM into a DigiKey-compatible BOM!
           </p>
         </header>
 
         <main className="space-y-6">
+          {!isCheckingAuth && authStatus && !authStatus.configured && (
+            <Alert variant="destructive" className="rounded-2xl border-red-300/70 bg-red-50/90">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Not connected to the DigiKey API: service credentials are not configured yet. 
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {!isCheckingAuth && authStatus?.configured && !authStatus.has_refresh_token && (
+            <Alert variant="destructive" className="rounded-2xl border-red-300/70 bg-red-50/90">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Not connected to the DigiKey API: backend authorization is missing. 
+              </AlertDescription>
+            </Alert>
+          )}
+
           <section className="rounded-3xl border border-black/10 bg-white/90 p-6 shadow-[0_24px_60px_-34px_rgba(17,20,27,0.52)] backdrop-blur-sm md:p-8">
             <FileUpload onFileSelect={handleFileSelect} />
 
@@ -92,19 +141,19 @@ function App() {
               <div className="mt-8 flex justify-center">
                 <Button
                   onClick={handleConvert}
-                  disabled={isProcessing}
+                  disabled={isProcessing || !serviceReady}
                   size="lg"
                   className="h-11 gap-2 rounded-full bg-[#c91118] px-8 text-sm tracking-wide text-[#fafbfc] hover:bg-[#a50e14]"
                 >
                   {isProcessing ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      Processing File
+                      Processing File...
                     </>
                   ) : (
                     <>
                       <Sparkles className="h-4 w-4" />
-                      Convert to Digi-Key BOM
+                      Convert to DigiKey BOM
                     </>
                   )}
                 </Button>
@@ -140,15 +189,26 @@ function App() {
             </section>
           )}
 
-          <section>
+          <section className="grid gap-6 md:grid-cols-2">
             <article className="rounded-2xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_-30px_rgba(15,23,42,0.45)] backdrop-blur-sm">
               <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">How to Use:</h3>
               <ol className="list-decimal space-y-2 pl-5 text-[#41464f]">
-                <li>Upload your Altium-exported BOM (Excel or CSV file with manufacturer part numbers and MPNs).</li>
+                <li>Upload your Altium-exported BOM (Excel or CSV file with manufacturer part numbers).</li>
                 <li>Click "Convert to DigiKey BOM".</li>
-                <li>Review the converted DigiKey-compatible BOM in the results table.</li>
-                <li>Download the output as either an Excel or CSV file.</li>
+                <li>Review the converted DigiKey BOM in the results table.</li>
+                <li>Download the output as an Excel or CSV file.</li>
               </ol>
+            </article>
+
+            <article className="rounded-2xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_-30px_rgba(15,23,42,0.45)] backdrop-blur-sm">
+              <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">Output Columns:</h3>
+              <p className="mb-3 text-[#41464f]">The following columns are appended to your BOM:</p>
+              <ul className="list-disc space-y-2 pl-5 text-[#41464f]">
+                  <li><span className="font-mono text-[#1f232b]">dkpn</span> — DigiKey part number (e.g. <span className="font-mono text-[#1f232b]">311-1445-1-ND</span>)</li>
+                  <li><span className="font-mono text-[#1f232b]">dk_packaging</span> — Selected packaging (prefers Cut Tape / CT)</li>
+                  <li><span className="font-mono text-[#1f232b]">dk_qty_avail</span> — Available quantity for that packaging</li>
+                  <li><span className="font-mono text-[#1f232b]">dk_search_url</span> — DigiKey search link for verification</li>
+              </ul>
             </article>
           </section>
         </main>

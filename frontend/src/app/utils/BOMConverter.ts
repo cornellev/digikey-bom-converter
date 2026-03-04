@@ -1,103 +1,109 @@
-import * as XLSX from 'xlsx';
+﻿import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import { BOMItem } from '../components/BOMTable';
 
-// Mock conversion function 
-function convertToDigiKeyPartNumber(partNumber: string, manufacturer: string): string {
-  // This is a mock conversion. With backend, you would:
-  // 1. Call DigiKey API with the manufacturer part number
-  // 2. Search for matching parts
-  // 3. Return the Digi-Key part number
-  
-  // For demo purposes, we'll generate a mock DigiKey part number
-  const prefix = manufacturer.substring(0, 2).toUpperCase();
-  const hash = partNumber.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  return `${prefix}${hash}-ND`;
+const BACKEND_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+
+export interface AuthStatus {
+  configured: boolean;
+  has_refresh_token: boolean;
 }
 
-export async function parseFile(file: File): Promise<any[]> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    
-    reader.onload = (e) => {
-      try {
-        const data = e.target?.result;
-        
-        if (file.name.endsWith('.csv')) {
-          // Parse CSV
-          Papa.parse(data as string, {
-            header: true,
-            skipEmptyLines: true,
-            complete: (results) => {
-              resolve(results.data);
-            },
-            error: (error) => {
-              reject(error);
-            }
-          });
-        } else {
-          // Parse Excel
-          const workbook = XLSX.read(data, { type: 'binary' });
-          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-          const jsonData = XLSX.utils.sheet_to_json(firstSheet);
-          resolve(jsonData);
-        }
-      } catch (error) {
-        reject(error);
-      }
-    };
-    
-    reader.onerror = () => reject(reader.error);
-    
-    if (file.name.endsWith('.csv')) {
-      reader.readAsText(file);
-    } else {
-      reader.readAsBinaryString(file);
+function asNumber(value: unknown, fallback: number): number {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function pickField(row: Record<string, unknown>, keys: string[], fallback: string): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return String(value);
     }
-  });
+  }
+  return fallback;
 }
 
-export function convertBOM(rawData: any[]): BOMItem[] {
-  return rawData.map((row) => {
-    // Try to find common column names (case-insensitive)
-    const partNumber = 
-      row['Part Number'] || 
-      row['PartNumber'] || 
-      row['part_number'] || 
-      row['MPN'] || 
-      row['Manufacturer Part Number'] ||
-      row['Part #'] ||
-      'UNKNOWN';
-    
-    const description = 
-      row['Description'] || 
-      row['description'] || 
-      row['Desc'] ||
-      row['Item Description'] ||
-      'No description';
-    
-    const quantity = 
-      parseInt(row['Quantity'] || row['Qty'] || row['quantity'] || row['qty'] || '1');
-    
-    const manufacturer = 
-      row['Manufacturer'] || 
-      row['manufacturer'] || 
-      row['Mfr'] ||
-      row['Mfg'] ||
-      'Generic';
+function normalizeRow(row: Record<string, unknown>): BOMItem {
+  const originalPartNumber = pickField(
+    row,
+    ['MPN', 'mpn', 'Part Number', 'PartNumber', 'part_number', 'Manufacturer Part Number', 'Part #'],
+    'UNKNOWN',
+  );
 
-    return {
-      originalPartNumber: String(partNumber),
-      digiKeyPartNumber: convertToDigiKeyPartNumber(String(partNumber), manufacturer),
-      description: String(description),
-      quantity: quantity,
-      manufacturer: manufacturer
-    };
+  const description = pickField(
+    row,
+    ['Description', 'description', 'Desc', 'Item Description'],
+    'No description',
+  );
+
+  const manufacturer = pickField(
+    row,
+    ['Manufacturer', 'manufacturer', 'Mfr', 'Mfg'],
+    'Generic',
+  );
+
+  const digiKeyPartNumber = pickField(
+    row,
+    ['dkpn', 'Digi-Key Part Number', 'digiKeyPartNumber'],
+    '',
+  );
+
+  const quantity = asNumber(
+    row['Quantity'] ?? row['Qty'] ?? row['quantity'] ?? row['qty'],
+    1,
+  );
+
+  return {
+    originalPartNumber,
+    digiKeyPartNumber,
+    description,
+    quantity,
+    manufacturer,
+  };
+}
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  const response = await fetch(`${BACKEND_BASE}/auth/status`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch auth status (${response.status}).`);
+  }
+  return response.json();
+}
+
+export async function fetchAuthorizeUrl(): Promise<string> {
+  const response = await fetch(`${BACKEND_BASE}/auth/start`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || `Failed to start auth (${response.status}).`);
+  }
+  const payload = await response.json();
+  if (!payload.authorize_url) {
+    throw new Error('Backend did not return an authorize URL.');
+  }
+  return payload.authorize_url;
+}
+
+export async function convertBOMViaBackend(file: File): Promise<BOMItem[]> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${BACKEND_BASE}/convert`, {
+    method: 'POST',
+    body: formData,
   });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || `Conversion failed (${response.status}).`);
+  }
+
+  const payload = await response.json();
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  return rows.map((row: Record<string, unknown>) => normalizeRow(row));
 }
 
 export function exportToExcel(data: BOMItem[], filename: string = 'converted-bom.xlsx') {
-  // Prepare data for export
   const exportData = data.map(item => ({
     'Original Part Number': item.originalPartNumber,
     'Digi-Key Part Number': item.digiKeyPartNumber,
@@ -106,26 +112,22 @@ export function exportToExcel(data: BOMItem[], filename: string = 'converted-bom
     'Quantity': item.quantity
   }));
 
-  // Create workbook and worksheet
   const worksheet = XLSX.utils.json_to_sheet(exportData);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'BOM');
 
-  // Set column widths
   worksheet['!cols'] = [
-    { wch: 20 }, // Original Part Number
-    { wch: 20 }, // Digi-Key Part Number
-    { wch: 40 }, // Description
-    { wch: 15 }, // Manufacturer
-    { wch: 10 }  // Quantity
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 40 },
+    { wch: 15 },
+    { wch: 10 }
   ];
 
-  // Generate and download file
   XLSX.writeFile(workbook, filename);
 }
 
 export function exportToCSV(data: BOMItem[], filename: string = 'converted-bom.csv') {
-  // Prepare data for export
   const exportData = data.map(item => ({
     'Original Part Number': item.originalPartNumber,
     'Digi-Key Part Number': item.digiKeyPartNumber,
@@ -134,14 +136,11 @@ export function exportToCSV(data: BOMItem[], filename: string = 'converted-bom.c
     'Quantity': item.quantity
   }));
 
-  // Convert to CSV
   const csv = Papa.unparse(exportData);
-  
-  // Create blob and download
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
   const url = URL.createObjectURL(blob);
-  
+
   link.setAttribute('href', url);
   link.setAttribute('download', filename);
   link.style.visibility = 'hidden';
