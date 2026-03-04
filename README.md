@@ -36,6 +36,18 @@ digikey-bom-converter/
 cd backend
 pip install -r requirements.txt
 uvicorn server:app --reload --port 8000
+
+uvicorn server:app --reload --port 8000   --ssl-keyfile .certs/localhost-key.pem   --ssl-certfile .certs/localhost-cert.pem
+```
+
+HTTPS for DigiKey OAuth redirect validation:
+
+```bash
+mkdir -p .certs
+openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes \
+  -keyout .certs/localhost-key.pem \
+  -out .certs/localhost-cert.pem \
+  -subj "/CN=localhost"
 ```
 
 ### 2. Run Frontend: 

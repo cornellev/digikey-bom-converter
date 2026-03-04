@@ -1,7 +1,13 @@
 ﻿"""FastAPI server entrypoint."""
 
+from dotenv import load_dotenv
+load_dotenv()
+
+import os
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from auth_service import complete_oauth_callback, get_auth_status, start_oauth
 from bom_service import convert_uploaded_bom
@@ -39,9 +45,11 @@ def auth_start() -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 @app.get('/auth/callback')
-def auth_callback(code: str, state: str) -> dict:
+def auth_callback(code: str, state: str):
     try:
-        return complete_oauth_callback(code=code, state=state)
+        complete_oauth_callback(code=code, state=state)
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+        return RedirectResponse(url=f'{frontend_url}/?auth=ok', status_code=307)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

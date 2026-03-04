@@ -3,9 +3,11 @@ import { FileUpload } from './components/FileUpload';
 import { BOMTable, BOMItem } from './components/BOMTable';
 import {
   AuthStatus,
+  BACKEND_BASE,
   convertBOMViaBackend,
   exportToExcel,
   exportToCSV,
+  fetchAuthorizeUrl,
   fetchAuthStatus,
 } from './utils/BOMConverter';
 import { Button } from './components/ui/button';
@@ -27,7 +29,7 @@ function App() {
       setAuthStatus(status);
     } catch {
       setAuthStatus(null);
-      setError('Could not reach backend. Make sure backend is running on http://localhost:8000.');
+      setError(`Could not reach backend. Make sure backend is running on ${BACKEND_BASE}.`);
     } finally {
       setIsCheckingAuth(false);
     }
@@ -38,6 +40,16 @@ function App() {
   }, []);
 
   const serviceReady = Boolean(authStatus?.configured && authStatus?.has_refresh_token);
+
+  const handleConnectDigikey = async () => {
+    try {
+      setError(null);
+      const authorizeUrl = await fetchAuthorizeUrl();
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start DigiKey authorization.');
+    }
+  };
 
   const handleFileSelect = (file: File) => {
     setUploadedFile(file);
@@ -129,7 +141,14 @@ function App() {
             <Alert variant="destructive" className="rounded-2xl border-red-300/70 bg-red-50/90">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                Not connected to the DigiKey API: backend authorization is missing. 
+                Not connected to the DigiKey API: backend authorization is missing.
+                <button
+                  type="button"
+                  onClick={handleConnectDigikey}
+                  className="ml-2 inline-flex items-center rounded-md border border-red-300 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                >
+                  Connect DigiKey
+                </button>
               </AlertDescription>
             </Alert>
           )}

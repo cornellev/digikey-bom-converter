@@ -2,7 +2,7 @@
 import Papa from 'papaparse';
 import { BOMItem } from '../components/BOMTable';
 
-const BACKEND_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+export const BACKEND_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
 export interface AuthStatus {
   configured: boolean;

@@ -21,7 +21,7 @@ TOKEN_URLS = {
     'prod': 'https://api.digikey.com/v1/oauth2/token',
     'sandbox': 'https://sandbox-api.digikey.com/v1/oauth2/token',
 }
-REDIRECT_URI = os.getenv('DIGIKEY_REDIRECT_URI', 'https://localhost:5000/callback/').strip()
+REDIRECT_URI = os.getenv('DIGIKEY_REDIRECT_URI', 'http://localhost:8000/auth/callback').strip()
 
 
 # --- PKCE Runtime State ---
@@ -62,6 +62,7 @@ def _make_state() -> str:
 # --- Auth Status ---
 def get_auth_status() -> dict[str, bool]:
     tokens = load_tokens()
+    print(tokens.get('refresh_token'), flush=True)
     return {
         'configured': bool(get_client_id() and _client_secret()),
         'has_refresh_token': bool((tokens.get('refresh_token') or '').strip()),
@@ -95,9 +96,10 @@ def start_oauth() -> str:
 def _normalize_token_payload(raw: dict[str, Any], fallback_refresh: str = '') -> dict[str, Any]:
     expires_in = int(raw.get('expires_in') or 0)
     expires_at = int(time.time()) + max(0, expires_in - 60)
+    refresh_token = (raw.get('refresh_token') or fallback_refresh or '').strip()
     return {
         'access_token': raw.get('access_token', ''),
-        'refresh_token': raw.get('refresh_token', fallback_refresh),
+        'refresh_token': refresh_token,
         'expires_at': expires_at,
     }
 
@@ -113,6 +115,7 @@ def exchange_code_for_tokens(code: str, verifier: str) -> dict[str, Any]:
         'redirect_uri': REDIRECT_URI,
         'grant_type': 'authorization_code',
         'code_verifier': verifier,
+        'scope': _scope(),
     }
 
     response = requests.post(TOKEN_URLS[_env_name()], data=data, timeout=30)
@@ -147,6 +150,7 @@ def refresh_access_token(refresh_token: str) -> dict[str, Any]:
         'client_secret': _client_secret(),
         'grant_type': 'refresh_token',
         'refresh_token': refresh_token,
+        'scope': _scope(),
     }
     response = requests.post(TOKEN_URLS[_env_name()], data=data, timeout=30)
     if response.status_code != 200:
