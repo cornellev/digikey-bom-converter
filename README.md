@@ -112,13 +112,13 @@ npm install
 npm run dev
 ```
 
-The frontend can be accessed at: `http://localhost:5173`
+The frontend can be accessed at: <http://localhost:5173>
 
 ### 6. Authorize once
 
 1. Open the frontend and click `Connect DigiKey`.
 2. Sign in and approve DigiKey access.
-3. Verify that `https://localhost:5000/auth/status` shows:
+3. Verify that <https://localhost:5000/auth/status> shows:
    - `configured: true`
    - `has_refresh_token: true`
 
