@@ -15,6 +15,7 @@ export interface BOMItem {
   description: string;
   quantity: number;
   manufacturer: string;
+  rawRow: Record<string, unknown>;
 }
 
 interface BOMTableProps {
@@ -27,6 +28,7 @@ export function BOMTable({ data, onDownloadExcel, onDownloadCSV }: BOMTableProps
   if (data.length === 0) {
     return null;
   }
+  const columns = Object.keys(data[0].rawRow || {});
 
   return (
     <div className="w-full space-y-4">
@@ -49,25 +51,21 @@ export function BOMTable({ data, onDownloadExcel, onDownloadCSV }: BOMTableProps
           <Table>
             <TableHeader className="bg-[#eef0f4]">
               <TableRow className="hover:bg-[#eef0f4]">
-                <TableHead className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">Original Part Number</TableHead>
-                <TableHead className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">Digi-Key Part Number</TableHead>
-                <TableHead className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">Description</TableHead>
-                <TableHead className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">Manufacturer</TableHead>
-                <TableHead className="px-4 py-3 text-right text-xs tracking-[0.14em] uppercase text-[#535a66]">Quantity</TableHead>
+                {columns.map((column) => (
+                  <TableHead key={column} className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">
+                    {column}
+                  </TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
               {data.map((item, index) => (
                 <TableRow key={index} className="border-b border-black/5 odd:bg-[#fafbfc] even:bg-white">
-                  <TableCell className="px-4 py-3 font-mono text-sm text-[#2b3039]">
-                    {item.originalPartNumber}
-                  </TableCell>
-                  <TableCell className="px-4 py-3 font-mono text-sm text-[#c91118]">
-                    {item.digiKeyPartNumber}
-                  </TableCell>
-                  <TableCell className="px-4 py-3 text-[#353b45]">{item.description}</TableCell>
-                  <TableCell className="px-4 py-3 text-[#353b45]">{item.manufacturer}</TableCell>
-                  <TableCell className="px-4 py-3 text-right text-[#353b45]">{item.quantity}</TableCell>
+                  {columns.map((column) => (
+                    <TableCell key={`${index}-${column}`} className="px-4 py-3 text-sm text-[#353b45]">
+                      {String(item.rawRow[column] ?? '')}
+                    </TableCell>
+                  ))}
                 </TableRow>
               ))}
             </TableBody>

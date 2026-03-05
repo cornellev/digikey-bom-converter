@@ -35,7 +35,7 @@ def locale_ship_to_country() -> str:
     return os.getenv('DIGIKEY_LOCALE_SHIPTOCOUNTRY', 'us').strip()
 
 
-# --- Digi-Key Product API Client ---
+# --- DigiKey Product API Client ---
 class DigiKeyV4:
     def __init__(
         self,

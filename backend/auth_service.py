@@ -1,4 +1,4 @@
-﻿"""DigiKey OAuth/token helpers."""
+"""DigiKey OAuth/token helpers."""
 
 import base64
 import hashlib
@@ -21,7 +21,7 @@ TOKEN_URLS = {
     'prod': 'https://api.digikey.com/v1/oauth2/token',
     'sandbox': 'https://sandbox-api.digikey.com/v1/oauth2/token',
 }
-REDIRECT_URI = os.getenv('DIGIKEY_REDIRECT_URI', 'http://localhost:8000/auth/callback').strip()
+REDIRECT_URI = os.getenv('DIGIKEY_REDIRECT_URI', 'http://localhost:5000/auth/callback').strip()
 
 
 # --- PKCE Runtime State ---
@@ -177,4 +177,4 @@ def ensure_valid_access_token() -> str:
         refreshed = refresh_access_token(refresh_token)
         return (refreshed.get('access_token') or '').strip()
 
-    raise RuntimeError('Digi-Key authorization required. Use /auth/start first.')
+    raise RuntimeError('DigiKey authorization required. Use /auth/start first.')

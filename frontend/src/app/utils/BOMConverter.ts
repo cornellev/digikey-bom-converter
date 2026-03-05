@@ -1,8 +1,8 @@
-﻿import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import { BOMItem } from '../components/BOMTable';
 
-export const BACKEND_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+export const BACKEND_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
 
 export interface AuthStatus {
   configured: boolean;
@@ -27,7 +27,7 @@ function pickField(row: Record<string, unknown>, keys: string[], fallback: strin
 function normalizeRow(row: Record<string, unknown>): BOMItem {
   const originalPartNumber = pickField(
     row,
-    ['MPN', 'mpn', 'Part Number', 'PartNumber', 'part_number', 'Manufacturer Part Number', 'Part #'],
+    ['Comment', 'comment', 'MPN', 'mpn', 'Part Number', 'PartNumber', 'part_number', 'Manufacturer Part Number', 'Part #'],
     'UNKNOWN',
   );
 
@@ -60,6 +60,7 @@ function normalizeRow(row: Record<string, unknown>): BOMItem {
     description,
     quantity,
     manufacturer,
+    rawRow: row,
   };
 }
 
@@ -104,37 +105,17 @@ export async function convertBOMViaBackend(file: File): Promise<BOMItem[]> {
 }
 
 export function exportToExcel(data: BOMItem[], filename: string = 'converted-bom.xlsx') {
-  const exportData = data.map(item => ({
-    'Original Part Number': item.originalPartNumber,
-    'Digi-Key Part Number': item.digiKeyPartNumber,
-    'Description': item.description,
-    'Manufacturer': item.manufacturer,
-    'Quantity': item.quantity
-  }));
+  const exportData = data.map(item => item.rawRow);
 
   const worksheet = XLSX.utils.json_to_sheet(exportData);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'BOM');
 
-  worksheet['!cols'] = [
-    { wch: 20 },
-    { wch: 20 },
-    { wch: 40 },
-    { wch: 15 },
-    { wch: 10 }
-  ];
-
   XLSX.writeFile(workbook, filename);
 }
 
 export function exportToCSV(data: BOMItem[], filename: string = 'converted-bom.csv') {
-  const exportData = data.map(item => ({
-    'Original Part Number': item.originalPartNumber,
-    'Digi-Key Part Number': item.digiKeyPartNumber,
-    'Description': item.description,
-    'Manufacturer': item.manufacturer,
-    'Quantity': item.quantity
-  }));
+  const exportData = data.map(item => item.rawRow);
 
   const csv = Papa.unparse(exportData);
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

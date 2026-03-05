@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { BOMTable, BOMItem } from './components/BOMTable';
 import {
@@ -36,10 +36,29 @@ function App() {
   };
 
   useEffect(() => {
+    const url = new URL(window.location.href);
+    const auth = url.searchParams.get('auth');
+    const message = url.searchParams.get('message');
+
+    if (auth === 'success') {
+      setError(null);
+    } else if (auth === 'error') {
+      setError(message || 'DigiKey authorization failed. Please try again.');
+    }
+
+    if (auth) {
+      url.searchParams.delete('auth');
+      url.searchParams.delete('message');
+      window.history.replaceState({}, document.title, url.toString());
+    }
+
     refreshAuthStatus();
   }, []);
 
   const serviceReady = Boolean(authStatus?.configured && authStatus?.has_refresh_token);
+  const exportBaseName = uploadedFile?.name
+    ? uploadedFile.name.replace(/\.[^/.]+$/, '')
+    : 'converted-bom';
 
   const handleConnectDigikey = async () => {
     try {
@@ -66,7 +85,7 @@ function App() {
     }
 
     if (!authStatus.has_refresh_token) {
-      setError('Not connected to the DigiKey API: backend authorization is missing.');
+      setError('Not connected to the DigiKey API: click Connect DigiKey first.');
       return;
     }
 
@@ -89,12 +108,12 @@ function App() {
 
   const handleDownloadExcel = () => {
     if (bomData.length === 0) return;
-    exportToExcel(bomData);
+    exportToExcel(bomData, `${exportBaseName}_digikey_bom.xlsx`);
   };
 
   const handleDownloadCSV = () => {
     if (bomData.length === 0) return;
-    exportToCSV(bomData);
+    exportToCSV(bomData, `${exportBaseName}_digikey_bom.csv`);
   };
 
   const handleReset = () => {
@@ -132,7 +151,7 @@ function App() {
             <Alert variant="destructive" className="rounded-2xl border-red-300/70 bg-red-50/90">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                Not connected to the DigiKey API: service credentials are not configured yet. 
+                Not connected to the DigiKey API: service credentials are not configured yet.
               </AlertDescription>
             </Alert>
           )}
@@ -223,10 +242,10 @@ function App() {
               <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">Output Columns:</h3>
               <p className="mb-3 text-[#41464f]">The following columns are appended to your BOM:</p>
               <ul className="list-disc space-y-2 pl-5 text-[#41464f]">
-                  <li><span className="font-mono text-[#1f232b]">dkpn</span> — DigiKey part number (e.g. <span className="font-mono text-[#1f232b]">311-1445-1-ND</span>)</li>
-                  <li><span className="font-mono text-[#1f232b]">dk_packaging</span> — Selected packaging (prefers Cut Tape / CT)</li>
-                  <li><span className="font-mono text-[#1f232b]">dk_qty_avail</span> — Available quantity for that packaging</li>
-                  <li><span className="font-mono text-[#1f232b]">dk_search_url</span> — DigiKey search link for verification</li>
+                  <li><span className="font-mono text-[#1f232b]">dkpn</span> - DigiKey part number (e.g. <span className="font-mono text-[#1f232b]">311-1445-1-ND</span>)</li>
+                  <li><span className="font-mono text-[#1f232b]">dk_packaging</span> - Selected packaging (prefers Cut Tape / CT)</li>
+                  <li><span className="font-mono text-[#1f232b]">dk_qty_avail</span> - Available quantity for that packaging</li>
+                  <li><span className="font-mono text-[#1f232b]">dk_search_url</span> - DigiKey search link for verification</li>
               </ul>
             </article>
           </section>

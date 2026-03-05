@@ -1,9 +1,10 @@
-﻿"""FastAPI server entrypoint."""
+"""FastAPI server entrypoint."""
 
 from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import urllib.parse
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,11 +16,36 @@ from bom_service import convert_uploaded_bom
 app = FastAPI(title='DigiKey BOM Converter Backend', version='0.1.0')
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'],
+    allow_origins=[
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        'https://localhost:5173',
+        'https://127.0.0.1:5173',
+    ],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+
+def _frontend_redirect_base() -> str:
+    return os.getenv('FRONTEND_AUTH_REDIRECT', 'http://localhost:5173/').strip()
+
+
+def _with_query(url: str, **params: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    merged = dict(urllib.parse.parse_qsl(parsed.query))
+    merged.update({k: v for k, v in params.items() if v})
+    return urllib.parse.urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            urllib.parse.urlencode(merged),
+            parsed.fragment,
+        )
+    )
 
 
 # --- Health Route ---
@@ -36,6 +62,7 @@ def auth_status() -> dict:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
 @app.get('/auth/start')
 def auth_start() -> dict:
     try:
@@ -44,14 +71,24 @@ def auth_start() -> dict:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
 @app.get('/auth/callback')
-def auth_callback(code: str, state: str):
+def auth_callback(code: str, state: str, return_json: bool = False):
     try:
-        complete_oauth_callback(code=code, state=state)
-        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-        return RedirectResponse(url=f'{frontend_url}/?auth=ok', status_code=307)
+        payload = complete_oauth_callback(code=code, state=state)
+        if return_json:
+            return payload
+        return RedirectResponse(
+            url=_with_query(_frontend_redirect_base(), auth='success'),
+            status_code=302,
+        )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if return_json:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(
+            url=_with_query(_frontend_redirect_base(), auth='error', message=str(exc)),
+            status_code=302,
+        )
 
 
 # --- Convert Route ---
