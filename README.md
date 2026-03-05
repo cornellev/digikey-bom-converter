@@ -70,7 +70,7 @@ npm install
 npm run dev
 ```
 
-The frontend can be accessed at: `http://localhost:5173`
+The frontend can be accessed at: <http://localhost:5173>
 
 ---
 
