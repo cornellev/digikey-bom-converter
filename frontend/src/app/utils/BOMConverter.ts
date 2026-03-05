@@ -9,11 +9,6 @@ export interface AuthStatus {
   has_refresh_token: boolean;
 }
 
-function asNumber(value: unknown, fallback: number): number {
-  const parsed = Number.parseInt(String(value ?? ''), 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 function pickField(row: Record<string, unknown>, keys: string[], fallback: string): string {
   for (const key of keys) {
     const value = row[key];
@@ -72,19 +67,6 @@ export async function fetchAuthStatus(): Promise<AuthStatus> {
   return response.json();
 }
 
-export async function fetchAuthorizeUrl(): Promise<string> {
-  const response = await fetch(`${BACKEND_BASE}/auth/start`);
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || `Failed to start auth (${response.status}).`);
-  }
-  const payload = await response.json();
-  if (!payload.authorize_url) {
-    throw new Error('Backend did not return an authorize URL.');
-  }
-  return payload.authorize_url;
-}
-
 export async function convertBOMViaBackend(file: File): Promise<BOMItem[]> {
   const formData = new FormData();
   formData.append('file', file);
@@ -102,6 +84,11 @@ export async function convertBOMViaBackend(file: File): Promise<BOMItem[]> {
   const payload = await response.json();
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   return rows.map((row: Record<string, unknown>) => normalizeRow(row));
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 export function exportToExcel(data: BOMItem[], filename: string = 'converted-bom.xlsx') {

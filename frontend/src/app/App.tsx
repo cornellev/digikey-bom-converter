@@ -7,7 +7,6 @@ import {
   convertBOMViaBackend,
   exportToExcel,
   exportToCSV,
-  fetchAuthorizeUrl,
   fetchAuthStatus,
 } from './utils/BOMConverter';
 import { Button } from './components/ui/button';
@@ -36,22 +35,6 @@ function App() {
   };
 
   useEffect(() => {
-    const url = new URL(window.location.href);
-    const auth = url.searchParams.get('auth');
-    const message = url.searchParams.get('message');
-
-    if (auth === 'success') {
-      setError(null);
-    } else if (auth === 'error') {
-      setError(message || 'DigiKey authorization failed. Please try again.');
-    }
-
-    if (auth) {
-      url.searchParams.delete('auth');
-      url.searchParams.delete('message');
-      window.history.replaceState({}, document.title, url.toString());
-    }
-
     refreshAuthStatus();
   }, []);
 
@@ -59,16 +42,6 @@ function App() {
   const exportBaseName = uploadedFile?.name
     ? uploadedFile.name.replace(/\.[^/.]+$/, '')
     : 'converted-bom';
-
-  const handleConnectDigikey = async () => {
-    try {
-      setError(null);
-      const authorizeUrl = await fetchAuthorizeUrl();
-      window.location.href = authorizeUrl;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start DigiKey authorization.');
-    }
-  };
 
   const handleFileSelect = (file: File) => {
     setUploadedFile(file);
@@ -85,7 +58,7 @@ function App() {
     }
 
     if (!authStatus.has_refresh_token) {
-      setError('Not connected to the DigiKey API: click Connect DigiKey first.');
+      setError('DigiKey API credentials are configured, but service authorization is not ready.');
       return;
     }
 
@@ -99,7 +72,8 @@ function App() {
       }
       setBomData(convertedData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to process file.');
+      const message = err instanceof Error ? err.message : 'Failed to process file.';
+      setError(message);
       setBomData([]);
     } finally {
       setIsProcessing(false);
@@ -160,14 +134,7 @@ function App() {
             <Alert variant="destructive" className="rounded-2xl border-red-300/70 bg-red-50/90">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                Not connected to the DigiKey API: backend authorization is missing.
-                <button
-                  type="button"
-                  onClick={handleConnectDigikey}
-                  className="ml-2 inline-flex items-center rounded-md border border-red-300 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
-                >
-                  Connect DigiKey
-                </button>
+                DigiKey API service authorization is not ready.
               </AlertDescription>
             </Alert>
           )}

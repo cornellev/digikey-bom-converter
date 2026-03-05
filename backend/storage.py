@@ -1,4 +1,4 @@
-﻿"""Handles persistent runtime data for OAuth tokens and MPN lookup cache."""
+"""Handles runtime data for DigiKey tokens and MPN lookup cache."""
 
 import json
 from pathlib import Path
