@@ -12,6 +12,7 @@ from bom_service import convert_uploaded_bom
 app = FastAPI(title='DigiKey BOM Converter Backend', version='0.1.0')
 app.add_middleware(
     CORSMiddleware,
+    """
     allow_origins=[
         'http://localhost:5173',
         'http://127.0.0.1:5173',
@@ -19,6 +20,8 @@ app.add_middleware(
         'https://127.0.0.1:5173',
         'https://cornellev.github.io/digikey-bom-converter'
     ],
+    """
+    allow_origins=['*'],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
