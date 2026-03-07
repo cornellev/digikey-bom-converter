@@ -23,8 +23,11 @@ from digikey_client import (
 )
 from storage import load_cache, save_cache
 
+MANUAL_CHECK_MSG = 'MANUAL CHECK REQUIRED'
+
 # --- BOM Column Heuristics ---
 MPN_CANDIDATES = [
+    'name',
     'mpn',
     'manufacturer part number',
     'manufacturerproductnumber',
@@ -86,14 +89,28 @@ def map_one_mpn(mpn: str, dk: DigiKeyV4) -> dict[str, Any]:
 
     try:
         details = dk.productdetails_by_mpn(mpn)
+        used_keyword_fallback = False
         offers = [] if details.get('__not_found__') else offers_from_productdetails(details)
 
         if not offers:
+            used_keyword_fallback = True
             keyword = dk.keyword_search(mpn, limit=5)
             offers = offers_from_keyword(keyword)
 
+        # Keyword search can return multiple distinct products; require manual review.
+        if used_keyword_fallback:
+            unique_dkpns = {str(o.get('dkpn', '')).strip() for o in offers if str(o.get('dkpn', '')).strip()}
+            if len(unique_dkpns) > 1:
+                out['dkpn'] = MANUAL_CHECK_MSG
+                out['dk_packaging'] = MANUAL_CHECK_MSG
+                out['dk_qty_avail'] = MANUAL_CHECK_MSG
+                return out
+
         choice = prefer_cut_tape(offers)
         if not choice:
+            out['dkpn'] = MANUAL_CHECK_MSG
+            out['dk_packaging'] = MANUAL_CHECK_MSG
+            out['dk_qty_avail'] = MANUAL_CHECK_MSG
             return out
 
         out['dkpn'] = choice['dkpn']
@@ -134,7 +151,8 @@ def convert_uploaded_bom(
     dk = _build_dk_client(access_token)
 
     cache = load_cache()
-    mpns = frame[detected_mpn_col].astype(str).fillna('').tolist()
+    # Fill nulls before string coercion 
+    mpns = frame[detected_mpn_col].fillna('').astype(str).tolist()
     unique_mpns = sorted(set([m.strip() for m in mpns if m.strip()]))
     results: dict[str, dict[str, Any]] = {}
 
@@ -167,6 +185,18 @@ def convert_uploaded_bom(
     frame['dk_packaging'] = [results.get(m.strip(), {}).get('dk_packaging', '') for m in mpns]
     frame['dk_qty_avail'] = [results.get(m.strip(), {}).get('dk_qty_avail', '') for m in mpns]
     frame['dk_search_url'] = [results.get(m.strip(), {}).get('dk_search_url', build_dk_search_url(m)) for m in mpns]
+
+    # If MPN exists but DigiKey fields are blank - requires manual check
+    for idx, mpn in enumerate(mpns):
+        if not str(mpn).strip():
+            continue
+        dkpn = str(frame.at[idx, 'dkpn'] or '').strip()
+        packaging = str(frame.at[idx, 'dk_packaging'] or '').strip()
+        qty = str(frame.at[idx, 'dk_qty_avail'] or '').strip()
+        if not dkpn and not packaging and not qty:
+            frame.at[idx, 'dkpn'] = MANUAL_CHECK_MSG
+            frame.at[idx, 'dk_packaging'] = MANUAL_CHECK_MSG
+            frame.at[idx, 'dk_qty_avail'] = MANUAL_CHECK_MSG
 
     rows = frame.to_dict(orient='records')
     meta = {

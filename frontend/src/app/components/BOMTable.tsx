@@ -51,6 +51,9 @@ export function BOMTable({ data, onDownloadExcel, onDownloadCSV }: BOMTableProps
           <Table>
             <TableHeader className="bg-[#eef0f4]">
               <TableRow className="hover:bg-[#eef0f4]">
+                <TableHead className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">
+                  Row
+                </TableHead>
                 {columns.map((column) => (
                   <TableHead key={column} className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">
                     {column}
@@ -61,6 +64,9 @@ export function BOMTable({ data, onDownloadExcel, onDownloadCSV }: BOMTableProps
             <TableBody>
               {data.map((item, index) => (
                 <TableRow key={index} className="border-b border-black/5 odd:bg-[#fafbfc] even:bg-white">
+                  <TableCell className="px-4 py-3 text-sm text-[#353b45]">
+                    {index + 1}
+                  </TableCell>
                   {columns.map((column) => (
                     <TableCell key={`${index}-${column}`} className="px-4 py-3 text-sm text-[#353b45]">
                       {String(item.rawRow[column] ?? '')}
