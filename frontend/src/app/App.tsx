@@ -203,17 +203,26 @@ function App() {
                 <li>Review the converted DigiKey BOM in the results table.</li>
                 <li>Download the output as an Excel or CSV file.</li>
               </ol>
+              <p className="mt-4 text-[#41464f]">
+                Exported file name:
+                <br />
+                <span className="font-mono text-[#1f232b]">[original_file_name]_digikey_bom.(xlsx/csv)</span>
+              </p>
             </article>
 
             <article className="rounded-2xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_-30px_rgba(15,23,42,0.45)] backdrop-blur-sm">
               <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">Output Columns:</h3>
               <p className="mb-3 text-[#41464f]">The following columns are appended to your BOM:</p>
               <ul className="list-disc space-y-2 pl-5 text-[#41464f]">
-                  <li><span className="font-mono text-[#1f232b]">dkpn</span> - DigiKey part number (e.g. <span className="font-mono text-[#1f232b]">311-1445-1-ND</span>)</li>
-                  <li><span className="font-mono text-[#1f232b]">dk_packaging</span> - Selected packaging (prefers Cut Tape / CT)</li>
-                  <li><span className="font-mono text-[#1f232b]">dk_qty_avail</span> - Available quantity for that packaging</li>
-                  <li><span className="font-mono text-[#1f232b]">dk_search_url</span> - DigiKey search link for verification</li>
+                <li><span className="font-mono text-[#1f232b]">dkpn</span> - DigiKey part number (e.g. <span className="font-mono text-[#1f232b]">311-1445-1-ND</span>)</li>
+                <li><span className="font-mono text-[#1f232b]">dk_packaging</span> - Selected packaging (prefers Cut Tape / CT)</li>
+                <li><span className="font-mono text-[#1f232b]">dk_qty_avail</span> - Available quantity for that packaging</li>
+                <li><span className="font-mono text-[#1f232b]">dk_search_url</span> - DigiKey search link for verification</li>
               </ul>
+              <p className="mt-3 text-[#41464f]">
+                If an MPN returns multiple possible matches or no usable match, these columns are set to{' '}
+                <span className="font-mono text-[#1f232b]">MANUAL CHECK REQUIRED</span>.
+              </p>
             </article>
           </section>
         </main>

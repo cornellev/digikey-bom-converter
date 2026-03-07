@@ -2,6 +2,8 @@
 
 Convert an Altium-exported BOM (Excel/CSV with manufacturer part numbers) into a DigiKey-compatible BOM with mapped DigiKey part numbers, packaging details, stock status, and product links.
 
+### Deployed Site: https://cornellev.github.io/digikey-bom-converter/
+
 ---
 
 ## Project Structure
@@ -81,6 +83,8 @@ The following output columns are appended to the converted BOM:
 - `dk_packaging` - Selected packaging (prefers Cut Tape / CT)
 - `dk_qty_avail` - Available quantity for that packaging
 - `dk_search_url` - DigiKey search link for verification
+
+If an MPN returns multiple possible matches or no usable match, these columns are set to `MANUAL CHECK REQUIRED`.
 
 Export file names:
 - `[original_file_name]_digikey_bom.xlsx`
