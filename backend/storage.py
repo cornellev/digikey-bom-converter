@@ -1,12 +1,15 @@
 """Handles runtime data for DigiKey tokens and MPN lookup cache."""
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 RUNTIME_DIR = Path(__file__).resolve().parent / '.runtime'
 TOKENS_PATH = RUNTIME_DIR / 'digikey_tokens.json'
-CACHE_PATH = RUNTIME_DIR / 'dk_cache.json'
+# DigiKey API responses keyed by request, each stamped with its fetch time (see DigiKeyV4._cached).
+CACHE_PATH = RUNTIME_DIR / 'dk_http_cache.json'
+CACHE_MAX_AGE_S = 24 * 3600
 
 def _ensure_runtime_dir() -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
@@ -33,4 +36,5 @@ def load_cache() -> dict[str, Any]:
     return _read_json(CACHE_PATH)
 
 def save_cache(cache: dict[str, Any]) -> None:
-    _write_json(CACHE_PATH, cache)
+    cutoff = time.time() - CACHE_MAX_AGE_S
+    _write_json(CACHE_PATH, {k: v for k, v in cache.items() if v.get('t', 0) >= cutoff})

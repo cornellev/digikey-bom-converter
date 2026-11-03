@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react';
 import { FileUpload } from './components/FileUpload';
-import { BOMTable, BOMItem } from './components/BOMTable';
+import { BOMTable } from './components/BOMTable';
 import {
   AuthStatus,
   BACKEND_BASE,
+  BOMItem,
+  ConvertMeta,
+  Selections,
   convertBOMViaBackend,
+  defaultSelections,
+  exportCartCSV,
   exportToExcel,
   exportToCSV,
   fetchAuthStatus,
@@ -16,6 +21,9 @@ import logoDark from '../assets/images/fulldark.png';
 
 function App() {
   const [bomData, setBomData] = useState<BOMItem[]>([]);
+  const [meta, setMeta] = useState<ConvertMeta | null>(null);
+  const [selections, setSelections] = useState<Selections>({});
+  const [boards, setBoards] = useState(1);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -43,10 +51,22 @@ function App() {
     ? uploadedFile.name.replace(/\.[^/.]+$/, '')
     : 'converted-bom';
 
+  const clearResults = () => {
+    setBomData([]);
+    setMeta(null);
+    setSelections({});
+  };
+
   const handleFileSelect = (file: File) => {
     setUploadedFile(file);
-    setBomData([]);
+    clearResults();
     setError(null);
+  };
+
+  const handleBoardsChange = (value: string) => {
+    const parsed = Number.parseInt(value, 10);
+    setBoards(Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 1000) : 1);
+    clearResults(); // quantities change which packaging and alternatives are valid, so re-run
   };
 
   const handleConvert = async () => {
@@ -66,32 +86,43 @@ function App() {
     setError(null);
 
     try {
-      const convertedData = await convertBOMViaBackend(uploadedFile);
-      if (convertedData.length === 0) {
+      const { items, meta: convertMeta } = await convertBOMViaBackend(uploadedFile, boards);
+      if (items.length === 0) {
         throw new Error('No data found in the uploaded file.');
       }
-      setBomData(convertedData);
+      setBomData(items);
+      setMeta(convertMeta);
+      setSelections(defaultSelections(items));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to process file.';
       setError(message);
-      setBomData([]);
+      clearResults();
     } finally {
       setIsProcessing(false);
     }
   };
 
+  const handleSelect = (index: number, choice: number) => {
+    setSelections((prev) => ({ ...prev, [index]: choice }));
+  };
+
+  const handleDownloadCart = () => {
+    if (bomData.length === 0) return;
+    exportCartCSV(bomData, selections, `${exportBaseName}_digikey_cart_x${boards}.csv`);
+  };
+
   const handleDownloadExcel = () => {
     if (bomData.length === 0) return;
-    exportToExcel(bomData, `${exportBaseName}_digikey_bom.xlsx`);
+    exportToExcel(bomData, selections, `${exportBaseName}_digikey_bom_x${boards}.xlsx`);
   };
 
   const handleDownloadCSV = () => {
     if (bomData.length === 0) return;
-    exportToCSV(bomData, `${exportBaseName}_digikey_bom.csv`);
+    exportToCSV(bomData, selections, `${exportBaseName}_digikey_bom_x${boards}.csv`);
   };
 
   const handleReset = () => {
-    setBomData([]);
+    clearResults();
     setUploadedFile(null);
     setError(null);
   };
@@ -142,8 +173,21 @@ function App() {
           <section className="rounded-3xl border border-black/10 bg-white/90 p-6 shadow-[0_24px_60px_-34px_rgba(17,20,27,0.52)] backdrop-blur-sm md:p-8">
             <FileUpload onFileSelect={handleFileSelect} />
 
+            <div className="mt-6 flex items-center justify-center gap-3 text-[#2b3039]">
+              <label htmlFor="boards" className="text-sm">Number of boards</label>
+              <input
+                id="boards"
+                type="number"
+                min={1}
+                max={1000}
+                value={boards}
+                onChange={(e) => handleBoardsChange(e.target.value)}
+                className="w-24 rounded-full border border-black/20 bg-white px-4 py-1.5 text-center text-sm"
+              />
+            </div>
+
             {uploadedFile && bomData.length === 0 && (
-              <div className="mt-8 flex justify-center">
+              <div className="mt-6 flex justify-center">
                 <Button
                   onClick={handleConvert}
                   disabled={isProcessing || !serviceReady}
@@ -173,10 +217,14 @@ function App() {
             </Alert>
           )}
 
-          {bomData.length > 0 && (
+          {bomData.length > 0 && meta && (
             <section className="rounded-3xl border border-black/10 bg-white/90 p-6 shadow-[0_24px_60px_-34px_rgba(17,20,27,0.52)] md:p-8">
               <BOMTable
                 data={bomData}
+                meta={meta}
+                selections={selections}
+                onSelect={handleSelect}
+                onDownloadCart={handleDownloadCart}
                 onDownloadExcel={handleDownloadExcel}
                 onDownloadCSV={handleDownloadCSV}
               />
@@ -198,31 +246,38 @@ function App() {
             <article className="rounded-2xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_-30px_rgba(15,23,42,0.45)] backdrop-blur-sm">
               <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">How to Use:</h3>
               <ol className="list-decimal space-y-2 pl-5 text-[#41464f]">
-                <li>Upload your Altium-exported BOM (Excel or CSV file with manufacturer part numbers).</li>
-                <li>Click "Convert to DigiKey BOM".</li>
-                <li>Review the converted DigiKey BOM in the results table.</li>
-                <li>Download the output as an Excel or CSV file.</li>
+                <li>Upload your Altium-exported BOM (Excel or CSV with manufacturer part numbers and quantities).</li>
+                <li>Set the number of boards and click "Convert to DigiKey BOM".</li>
+                <li>
+                  Check the lines marked red. Out-of-stock or unmatched parts come with in-stock alternatives; safe
+                  drop-ins are preselected, and anything marked REVIEW (different package, looser tolerance, or a
+                  non-identical IC) is left for you to decide.
+                </li>
+                <li>
+                  Download the <span className="font-semibold">DigiKey cart CSV</span> and upload it in the DigiKey
+                  cart (Upload a file / BOM upload). It only contains lines that can actually be ordered.
+                </li>
               </ol>
-              <p className="mt-4 text-[#41464f]">
-                Exported file name:
-                <br />
-                <span className="font-mono text-[#1f232b]">[original_file_name]_digikey_bom.(xlsx/csv)</span>
-              </p>
             </article>
 
             <article className="rounded-2xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_-30px_rgba(15,23,42,0.45)] backdrop-blur-sm">
-              <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">Output Columns:</h3>
-              <p className="mb-3 text-[#41464f]">The following columns are appended to your BOM:</p>
+              <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">Downloads:</h3>
               <ul className="list-disc space-y-2 pl-5 text-[#41464f]">
-                <li><span className="font-mono text-[#1f232b]">dkpn</span> - DigiKey part number (e.g. <span className="font-mono text-[#1f232b]">311-1445-1-ND</span>)</li>
-                <li><span className="font-mono text-[#1f232b]">dk_packaging</span> - Selected packaging (prefers Cut Tape / CT)</li>
-                <li><span className="font-mono text-[#1f232b]">dk_qty_avail</span> - Available quantity for that packaging</li>
-                <li><span className="font-mono text-[#1f232b]">dk_search_url</span> - DigiKey search link for verification</li>
+                <li>
+                  <span className="font-semibold">DigiKey cart CSV</span>: Digi-Key Part Number, Quantity (per board ×
+                  boards), Customer Reference (designators).
+                </li>
+                <li>
+                  <span className="font-semibold">Full Excel</span>: your BOM with DigiKey columns appended
+                  (<span className="font-mono">dkpn</span>, <span className="font-mono">match_status</span>,{' '}
+                  <span className="font-mono">order_qty</span>, chosen <span className="font-mono">order_dkpn</span>, ...),
+                  plus "DigiKey cart" and "Needs attention" sheets.
+                </li>
+                <li>
+                  Packaging prefers Cut Tape, then Digi-Reel; full reels and DigiKey Marketplace sellers only when
+                  nothing else covers the quantity.
+                </li>
               </ul>
-              <p className="mt-3 text-[#41464f]">
-                If an MPN returns multiple possible matches or no usable match, these columns are set to{' '}
-                <span className="font-mono text-[#1f232b]">MANUAL CHECK REQUIRED</span>.
-              </p>
             </article>
           </section>
         </main>

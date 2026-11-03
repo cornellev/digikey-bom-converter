@@ -1,4 +1,4 @@
-import { Download } from 'lucide-react';
+import { Download, ShoppingCart, ExternalLink } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   Table,
@@ -8,42 +8,104 @@ import {
   TableHeader,
   TableRow,
 } from './ui/table';
-
-export interface BOMItem {
-  originalPartNumber: string;
-  digiKeyPartNumber: string;
-  description: string;
-  quantity: number;
-  manufacturer: string;
-  rawRow: Record<string, unknown>;
-}
+import {
+  Alternative,
+  BOMItem,
+  ConvertMeta,
+  MatchStatus,
+  Selections,
+  cartLines,
+  chosenPart,
+} from '../utils/BOMConverter';
 
 interface BOMTableProps {
   data: BOMItem[];
+  meta: ConvertMeta;
+  selections: Selections;
+  onSelect: (index: number, choice: number) => void;
+  onDownloadCart: () => void;
   onDownloadExcel: () => void;
   onDownloadCSV: () => void;
 }
 
-export function BOMTable({ data, onDownloadExcel, onDownloadCSV }: BOMTableProps) {
+const STATUS_LABEL: Record<MatchStatus, { label: string; className: string }> = {
+  ok: { label: 'Ready', className: 'bg-emerald-100 text-emerald-800' },
+  marketplace: { label: 'Marketplace seller', className: 'bg-amber-100 text-amber-800' },
+  moq: { label: 'Minimum order too high', className: 'bg-red-100 text-red-800' },
+  low_stock: { label: 'Not enough stock', className: 'bg-red-100 text-red-800' },
+  out_of_stock: { label: 'Out of stock', className: 'bg-red-100 text-red-800' },
+  ambiguous: { label: 'Several manufacturers', className: 'bg-red-100 text-red-800' },
+  not_found: { label: 'Not found', className: 'bg-red-100 text-red-800' },
+  error: { label: 'Lookup error', className: 'bg-red-100 text-red-800' },
+  not_a_part: { label: 'Skipped (not a part)', className: 'bg-slate-100 text-slate-600' },
+};
+
+function price(value: number | null): string {
+  return value === null || value === undefined ? '—' : `$${value.toFixed(value < 1 ? 3 : 2)}`;
+}
+
+function altLabel(alt: Alternative): string {
+  const flags = [alt.review ? 'REVIEW' : '', alt.orderable ? '' : 'not orderable'].filter(Boolean).join(', ');
+  return `${alt.mpn} (${alt.manufacturer}) · ${alt.stock.toLocaleString()} in stock · ${price(alt.unit_price)}`
+    + (flags ? ` · ${flags}` : '');
+}
+
+export function BOMTable({
+  data,
+  meta,
+  selections,
+  onSelect,
+  onDownloadCart,
+  onDownloadExcel,
+  onDownloadCSV,
+}: BOMTableProps) {
   if (data.length === 0) {
     return null;
   }
-  const columns = Object.keys(data[0].rawRow || {});
+
+  const parts = data.map((item, index) => chosenPart(item, selections[index]));
+  const ready = parts.filter((p) => p?.orderable).length;
+  const skipped = parts.filter((p) => p === null).length;
+  const attention = data.length - ready - skipped;
+  const review = parts.filter((p) => p?.orderable && p.review).length;
+  const cartCount = cartLines(data, selections).length;
+  const total = data.reduce((sum, item, index) => {
+    const part = parts[index];
+    return part?.orderable && part.unitPrice !== null ? sum + part.unitPrice * item.orderQty : sum;
+  }, 0);
 
   return (
     <div className="w-full space-y-4">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl tracking-tight text-[#1b1f27]">Converted DigiKey-Compatible BOM:</h2>
-        <div className="flex items-center gap-2">
-          <Button onClick={onDownloadExcel} className="gap-2 rounded-full bg-[#c91118] px-5 text-white hover:bg-[#a40e14]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-2xl tracking-tight text-[#1b1f27]">
+          DigiKey BOM for {meta.boards} board{meta.boards === 1 ? '' : 's'}
+        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={onDownloadCart} className="gap-2 rounded-full bg-[#c91118] px-5 text-white hover:bg-[#a40e14]">
+            <ShoppingCart className="w-4 h-4" />
+            DigiKey cart CSV ({cartCount})
+          </Button>
+          <Button onClick={onDownloadExcel} variant="outline" className="gap-2 rounded-full border-black/20 bg-white px-5 text-[#1f232b] hover:bg-[#efeff2]">
             <Download className="w-4 h-4" />
-            Download Excel
+            Full Excel
           </Button>
           <Button onClick={onDownloadCSV} variant="outline" className="gap-2 rounded-full border-black/20 bg-white px-5 text-[#1f232b] hover:bg-[#efeff2]">
             <Download className="w-4 h-4" />
-            Download CSV
+            Full CSV
           </Button>
         </div>
+      </div>
+
+      <div className="flex flex-wrap gap-3 text-sm">
+        <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-800">{ready} ready for the cart</span>
+        {attention > 0 && (
+          <span className="rounded-full bg-red-100 px-3 py-1 text-red-800">{attention} need a decision (not in cart)</span>
+        )}
+        {review > 0 && (
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-800">{review} substitutes marked for review</span>
+        )}
+        {skipped > 0 && <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">{skipped} skipped</span>}
+        <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">≈ {price(total)} at listed prices</span>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-black/10">
@@ -51,36 +113,97 @@ export function BOMTable({ data, onDownloadExcel, onDownloadCSV }: BOMTableProps
           <Table>
             <TableHeader className="bg-[#eef0f4]">
               <TableRow className="hover:bg-[#eef0f4]">
-                <TableHead className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">
-                  Row
-                </TableHead>
-                {columns.map((column) => (
-                  <TableHead key={column} className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">
-                    {column}
+                {['#', 'Designator', 'Part', 'Qty', 'DigiKey part', 'Stock', 'Unit price', 'Status'].map((h) => (
+                  <TableHead key={h} className="px-4 py-3 text-xs tracking-[0.14em] uppercase text-[#535a66]">
+                    {h}
                   </TableHead>
                 ))}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map((item, index) => (
-                <TableRow key={index} className="border-b border-black/5 odd:bg-[#fafbfc] even:bg-white">
-                  <TableCell className="px-4 py-3 text-sm text-[#353b45]">
-                    {index + 1}
-                  </TableCell>
-                  {columns.map((column) => (
-                    <TableCell key={`${index}-${column}`} className="px-4 py-3 text-sm text-[#353b45]">
-                      {String(item.rawRow[column] ?? '')}
+              {data.map((item, index) => {
+                const selection = selections[index] ?? -1;
+                const alt = selection >= 0 ? item.alternatives[selection] : undefined;
+                const part = parts[index];
+                const status = STATUS_LABEL[item.status] ?? STATUS_LABEL.error;
+                return (
+                  <TableRow key={index} className="border-b border-black/5 align-top odd:bg-[#fafbfc] even:bg-white">
+                    <TableCell className="px-4 py-3 text-sm text-[#353b45]">{index + 1}</TableCell>
+                    <TableCell className="max-w-[10rem] whitespace-normal px-4 py-3 text-sm text-[#353b45]">
+                      {item.designators}
                     </TableCell>
-                  ))}
-                </TableRow>
-              ))}
+                    <TableCell className="px-4 py-3 text-sm text-[#353b45]">
+                      <div className="font-mono">{item.mpn}</div>
+                      <div className="text-xs text-[#6b717c]">{item.manufacturer}</div>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-sm whitespace-nowrap text-[#353b45]">
+                      {meta.boards > 1 ? `${item.qtyPerBoard} × ${meta.boards} = ` : ''}
+                      <span className="font-semibold">{item.orderQty}</span>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-[#353b45]">
+                      {part?.dkpn ? (
+                        <a
+                          href={alt?.url || item.searchUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={`inline-flex items-center gap-1 font-mono hover:underline ${part.orderable ? '' : 'text-[#9aa0aa] line-through'}`}
+                        >
+                          {part.dkpn}
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : (
+                        item.searchUrl && (
+                          <a href={item.searchUrl} target="_blank" rel="noreferrer" className="text-xs hover:underline">
+                            search DigiKey
+                          </a>
+                        )
+                      )}
+                      <div className="text-xs text-[#6b717c]">{part?.packaging}</div>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-[#353b45]">
+                      {alt ? alt.stock.toLocaleString() : item.stock}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-[#353b45]">{price(part?.unitPrice ?? null)}</TableCell>
+                    <TableCell className="min-w-[18rem] whitespace-normal px-4 py-3 text-sm text-[#353b45]">
+                      <span className={`rounded-full px-2 py-0.5 text-xs ${status.className}`}>{status.label}</span>
+                      {item.note && <div className="mt-1 text-xs text-[#5b616c]">{item.note}</div>}
+                      {item.alternatives.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          <select
+                            value={selection}
+                            onChange={(e) => onSelect(index, Number(e.target.value))}
+                            className="w-full rounded-lg border border-black/15 bg-white px-2 py-1 text-xs"
+                          >
+                            <option value={-1}>
+                              Keep {item.mpn || 'original'}{part && !alt && !part.orderable ? ' (not ordered)' : ''}
+                            </option>
+                            {item.alternatives.map((a, i) => (
+                              <option key={a.dkpn} value={i}>
+                                {altLabel(a)}
+                              </option>
+                            ))}
+                          </select>
+                          {alt && (
+                            <div className={`text-xs ${alt.review ? 'text-amber-800' : 'text-[#5b616c]'}`}>
+                              {alt.source}{alt.detail ? `: ${alt.detail}` : ''}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>
       </div>
 
-      <div className="text-right text-sm text-[#535a66]">
-        Total Items: {data.length}
+      <div className="text-right text-xs text-[#6b717c]">
+        Part numbers from "{meta.mpn_column}"
+        {meta.part_number_column ? ` (fallback "${meta.part_number_column}")` : ''}, quantities from{' '}
+        {meta.qty_column ? `"${meta.qty_column}"` : 'designator counts'} · {meta.api_calls} DigiKey API calls
+        {meta.api_rate_remaining !== null ? `, ${meta.api_rate_remaining} left in DigiKey quota` : ''}
       </div>
     </div>
   );

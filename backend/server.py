@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from auth_service import get_auth_status
 from bom_service import convert_uploaded_bom
 
-app = FastAPI(title='DigiKey BOM Converter Backend', version='0.1.0')
+app = FastAPI(title='DigiKey BOM Converter Backend', version='0.2.0')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -47,22 +47,20 @@ async def convert(
     mpn_col: str | None = Form(default=None),
     sheet: str | None = Form(default=None),
     workers: int = Form(default=4),
+    boards: int = Form(default=1),
+    alternatives: bool = Form(default=True),
 ) -> dict:
     try:
         payload = await file.read()
-        rows, meta = convert_uploaded_bom(
+        rows, row_alternatives, meta = convert_uploaded_bom(
             payload=payload,
             filename=file.filename or '',
             mpn_col=mpn_col,
             sheet=sheet,
             workers=workers,
+            boards=boards,
+            with_alternatives=alternatives,
         )
-        return {
-            'rows': rows,
-            'row_count': meta['row_count'],
-            'mpn_column': meta['mpn_column'],
-            'sheet': meta['sheet'],
-            'workers': meta['workers'],
-        }
+        return {'rows': rows, 'alternatives': row_alternatives, **meta}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
