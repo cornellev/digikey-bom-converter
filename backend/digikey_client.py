@@ -39,6 +39,23 @@ def locale_ship_to_country() -> str:
 
 
 # --- DigiKey Product API Client ---
+MAX_RATE_LIMIT_WAIT_S = 15  # longer Retry-After = the daily quota is used up, so stop instead of waiting
+
+
+class QuotaExceeded(RuntimeError):
+    """DigiKey's API quota for the app is used up (HTTP 429 with a long or missing Retry-After)."""
+
+    def __init__(self, retry_after_s: Optional[int]):
+        self.retry_after_s = retry_after_s
+        if retry_after_s:
+            hours, minutes = divmod(round(retry_after_s / 60), 60)
+            when = f'in about {hours} h {minutes} min' if hours else f'in about {max(minutes, 1)} min'
+        else:
+            when = 'later (the limit resets daily)'
+        super().__init__(f'DigiKey API limit reached for today. Try again {when}.')
+
+
+
 class DigiKeyV4:
     def __init__(
         self,
@@ -80,9 +97,11 @@ class DigiKeyV4:
             response = self.session.request(method, url, **kwargs)
             status = response.status_code
             if status == 429:
-                retry_after = response.headers.get('Retry-After')
-                wait = int(retry_after) if (retry_after and retry_after.isdigit()) else (2 ** attempt)
-                time.sleep(wait)
+                retry_after = response.headers.get('Retry-After', '')
+                wait = int(retry_after) if retry_after.isdigit() else None
+                if wait is None or wait > MAX_RATE_LIMIT_WAIT_S:
+                    raise QuotaExceeded(wait)
+                time.sleep(wait)  # short per-minute burst limit: wait it out
                 last = response
                 continue
             if status in (500, 502, 503, 504):
@@ -112,6 +131,8 @@ class DigiKeyV4:
         def fetch() -> dict[str, Any]:
             response = self._request_with_retry('GET', f'{self.base}{path}', params=params)
             self._note_response(response)
+            if response.status_code == 429:
+                raise QuotaExceeded(None)
             if response.status_code == 404:
                 try:
                     detail = (response.json() or {}).get('detail', '')
@@ -130,6 +151,8 @@ class DigiKeyV4:
         def fetch() -> dict[str, Any]:
             response = self._request_with_retry('POST', f'{self.base}{path}', json=payload)
             self._note_response(response)
+            if response.status_code == 429:
+                raise QuotaExceeded(None)
             if response.status_code == 401:
                 raise RuntimeError('401 Unauthorized: token invalid/expired or subscription mismatch.')
             if response.status_code >= 400:
@@ -159,6 +182,44 @@ class DigiKeyV4:
         if sort:
             payload['SortOptions'] = sort
         return self._post('/search/keyword', payload)
+
+
+def merge_listings(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """DigiKey can list one part several times under different supplier prefixes (e.g. a reel-only 2571-... listing
+    and a 4713-... listing with cut tape). Merge them per manufacturer + MPN so packaging is chosen across all of them."""
+    merged: dict[tuple, dict[str, Any]] = {}
+    for product in products:
+        key = ((product.get('Manufacturer') or {}).get('Id'), (product.get('ManufacturerProductNumber') or '').lower())
+        if key not in merged:
+            merged[key] = {**product, 'ProductVariations': list(product.get('ProductVariations') or [])}
+            continue
+        seen = {v.get('DigiKeyProductNumber') for v in merged[key]['ProductVariations']}
+        merged[key]['ProductVariations'] += [
+            v for v in product.get('ProductVariations') or [] if v.get('DigiKeyProductNumber') not in seen
+        ]
+    return list(merged.values())
+
+
+def lookup_product(dk: DigiKeyV4, mpn: str, manufacturer_id: Optional[int] = None) -> Optional[dict[str, Any]]:
+    """Product details for an MPN (optionally pinned to a manufacturer), with every DigiKey listing merged.
+
+    productdetails answers "Duplicate Products found" when DigiKey lists the same part more than once, even with the
+    manufacturer pinned. Then the keyword results with that exact MPN are merged instead; if they still span several
+    manufacturers the part is genuinely ambiguous and None is returned.
+    """
+    details = dk.productdetails_by_mpn(mpn, manufacturer_id)
+    product = details.get('Product') if not details.get('__not_found__') else None
+    if product:
+        return product
+    if 'duplicate' not in str(details.get('detail', '')).lower():
+        return None
+    matches = [
+        p for p in (dk.keyword_search(mpn, limit=50).get('Products') or [])
+        if (p.get('ManufacturerProductNumber') or '').lower() == mpn.lower()
+        and (manufacturer_id is None or (p.get('Manufacturer') or {}).get('Id') == manufacturer_id)
+    ]
+    merged = merge_listings(matches)
+    return merged[0] if len(merged) == 1 else None
 
 
 # --- Offer Extraction/Ranking Helpers ---

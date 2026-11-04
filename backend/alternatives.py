@@ -1,37 +1,35 @@
-"""Suggest orderable replacements for BOM lines that can't be bought as-is.
+"""Suggest orderable replacements for BOM lines that can't be bought as-is, and judge each one against the original.
 
-Two sources, both from the DigiKey Product Information v4 API:
-1. DigiKey's own substitutes (`/search/{part}/substitutions`): Direct / Upgrade / Similar parts.
-2. A parametric search in the same category for passives (same value, package, tolerance or tighter, ...), which
-   covers niche parts DigiKey lists no substitutes for. Not used for ICs and other actives: "same package and similar
-   specs" is not a safe swap there. Actives only get DigiKey's own substitutes, with the package compared and anything
-   short of a Direct substitute labelled for engineer review.
+Candidates come from the DigiKey Product Information v4 API:
+1. DigiKey's own substitutes (`/search/{part}/substitutions`): Direct / Upgrade / Parametric Equivalent / Similar.
+2. For resistors, capacitors and inductors, a parametric search in the same category (same value, package,
+   tolerance, ...), which covers niche parts DigiKey lists no substitutes for; if nothing orderable turns up, tighter
+   tolerances and then one step looser.
+
+Every candidate is then compared spec by spec with the original (`specs.compare_parts`) and gets a verdict. Only
+`drop_in` candidates (same package, every listed spec equal or better) are safe to pick without a human.
 """
 
 import re
 from typing import Any, Optional
 
-from digikey_client import DigiKeyV4, build_dk_search_url, pick_variation
+from digikey_client import DigiKeyV4, build_dk_search_url, lookup_product, merge_listings, pick_variation
+from specs import compare_parts
 
 MAX_ALTERNATIVES = 5
-MAX_SUBSTITUTES_CHECKED = 3  # each costs one productdetails call (API budget is ~1000 calls/day)
+MIN_DROP_INS = 3
+# Each checked substitute costs one productdetails call (API budget is ~1000 calls/day). Actives only have DigiKey's
+# substitutes to go on, so more of them are checked.
+MAX_SUBSTITUTES_CHECKED = {'passive': 3, 'active': 6}
 
-# Top-level category -> (parameters that must match exactly, parameters that improve the ranking when they match).
-PASSIVE_PARAMETERS: dict[str, tuple[list[str], list[str]]] = {
-    'Resistors': (
-        ['Resistance', 'Package / Case', 'Tolerance'],
-        ['Temperature Coefficient', 'Power (Watts)', 'Composition', 'Ratings'],
-    ),
-    'Capacitors': (
-        ['Capacitance', 'Package / Case', 'Voltage - Rated', 'Temperature Coefficient'],
-        ['Tolerance', 'Operating Temperature', 'Ratings', 'Height - Seated (Max)'],
-    ),
-    'Inductors, Coils, Chokes': (
-        ['Inductance', 'Package / Case'],
-        ['Current Rating (Amps)', 'Tolerance', 'Shielding', 'DC Resistance (DCR)', 'Current - Saturation (Isat)'],
-    ),
+# Top-level category -> parameters a parametric search must match exactly.
+PASSIVE_SEARCH_PARAMETERS: dict[str, list[str]] = {
+    'Resistors': ['Resistance', 'Package / Case', 'Tolerance'],
+    'Capacitors': ['Capacitance', 'Package / Case', 'Voltage - Rated', 'Temperature Coefficient'],
+    'Inductors, Coils, Chokes': ['Inductance', 'Package / Case'],
 }
 SUBSTITUTE_RANK = {'Direct': 0, 'Upgrade': 1, 'Parametric Equivalent': 2, 'Similar': 3}
+VERDICT_RANK = {'drop_in': 0, 'check': 1, 'worse': 2, 'unverified': 2, 'different_package': 3}
 
 
 def _categories(product: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -47,7 +45,7 @@ def _params(product: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _is_passive(product: dict[str, Any]) -> bool:
-    return _categories(product)[0].get('Name') in PASSIVE_PARAMETERS
+    return _categories(product)[0].get('Name') in PASSIVE_SEARCH_PARAMETERS
 
 
 def _same_part(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -56,16 +54,44 @@ def _same_part(a: dict[str, Any], b: dict[str, Any]) -> bool:
     )
 
 
-def _alternative(product: dict[str, Any], need: int, source: str, detail: str = '') -> Optional[dict[str, Any]]:
-    variation, status = pick_variation(product, need)
-    if not variation:
-        return None
+def _absolute(url: str) -> str:
+    url = (url or '').strip()
+    if url.startswith('//'):
+        return 'https:' + url
+    if url.startswith('/'):
+        return 'https://www.digikey.com' + url
+    return url
+
+
+def product_card(product: dict[str, Any]) -> dict[str, Any]:
+    """Display fields for a DigiKey product: description, photo, datasheet and product page."""
+    description = product.get('Description')
+    if isinstance(description, dict):
+        description = description.get('ProductDescription') or description.get('DetailedDescription') or ''
     mpn = product.get('ManufacturerProductNumber', '')
     return {
         'mpn': mpn,
         'manufacturer': (product.get('Manufacturer') or {}).get('Name', ''),
-        'description': (product.get('Description') or {}).get('ProductDescription', '')
-        if isinstance(product.get('Description'), dict) else str(product.get('Description') or ''),
+        'description': str(description or ''),
+        'photo': _absolute(product.get('PhotoUrl', '')),
+        'datasheet': _absolute(product.get('DatasheetUrl', '')),
+        'url': _absolute(product.get('ProductUrl', '')) or build_dk_search_url(mpn),
+    }
+
+
+def _alternative(
+    product: dict[str, Any], need: int, source: str, original: Optional[dict[str, Any]] = None
+) -> Optional[dict[str, Any]]:
+    variation, status = pick_variation(product, need)
+    if not variation:
+        return None
+    if original:
+        judgement = compare_parts(original, product)
+    else:
+        judgement = {'verdict': 'unverified', 'summary': 'no original part to compare against', 'specs': [],
+                     'worse_count': 0}
+    return {
+        **product_card(product),
         'dkpn': variation['dkpn'],
         'packaging': variation['packaging'],
         'stock': variation['stock'],
@@ -74,9 +100,11 @@ def _alternative(product: dict[str, Any], need: int, source: str, detail: str = 
         'status': status,
         'orderable': status in ('ok', 'marketplace'),
         'source': source,
-        'detail': detail,
-        'review': False,
-        'url': build_dk_search_url(mpn),
+        'verdict': judgement['verdict'],
+        'detail': judgement['summary'],
+        'specs': judgement['specs'],
+        'worse_count': judgement['worse_count'],
+        'review': judgement['verdict'] != 'drop_in',
     }
 
 
@@ -85,7 +113,6 @@ def _from_substitutes(product: dict[str, Any], need: int, dk: DigiKeyV4) -> list
     if not variations:
         return []
     subs = (dk.substitutions(variations[0].get('DigiKeyProductNumber', '')) or {}).get('ProductSubstitutes') or []
-    package = (_params(product).get('Package / Case') or {}).get('ValueText', '')
 
     # The endpoint lists one entry per packaging; group to one per part, keeping its best type and largest stock.
     parts: dict[tuple, dict[str, Any]] = {}
@@ -100,26 +127,14 @@ def _from_substitutes(product: dict[str, Any], need: int, dk: DigiKeyV4) -> list
             entry.update(rank=SUBSTITUTE_RANK[kind], kind=kind)
 
     ranked = sorted((p for p in parts.values() if p['stock'] >= need), key=lambda p: (p['rank'], -p['stock']))
+    limit = MAX_SUBSTITUTES_CHECKED['passive' if _is_passive(product) else 'active']
     out = []
-    for entry in ranked[:MAX_SUBSTITUTES_CHECKED]:
+    for entry in ranked[:limit]:
         sub = entry['sub']
-        details = dk.productdetails_by_mpn(sub['ManufacturerProductNumber'], (sub.get('Manufacturer') or {}).get('Id'))
-        full = details.get('Product') if not details.get('__not_found__') else None
-        if not full:
-            continue
-        sub_package = (_params(full).get('Package / Case') or {}).get('ValueText', '')
-        notes = []
-        if package and sub_package and sub_package != package:
-            notes.append(f'DIFFERENT package: {sub_package} (was {package}), not a drop-in')
-        elif package and sub_package:
-            notes.append(f'same package {package}')
-        alt = _alternative(full, need, f'DigiKey substitute ({entry["kind"].lower()})', '; '.join(notes))
+        full = lookup_product(dk, sub['ManufacturerProductNumber'], (sub.get('Manufacturer') or {}).get('Id'))
+        alt = _alternative(full, need, f'DigiKey {entry["kind"].lower()} substitute', product) if full else None
         if alt:
-            different_package = bool(package and sub_package and sub_package != package)
-            alt['review'] = different_package or (entry['kind'] != 'Direct' and not _is_passive(product))
             out.append(alt)
-    # Same-package swaps first; keep DigiKey's ranking otherwise.
-    out.sort(key=lambda a: a['detail'].startswith('DIFFERENT'))
     return out
 
 
@@ -136,10 +151,9 @@ def _parametric_search(
     `tolerance_ids` replaces the tolerance filter with a list of allowed tolerance values ([] = any tolerance).
     """
     top, leaf = _categories(product)
-    required, _ = PASSIVE_PARAMETERS.get(top.get('Name'), ([], []))
     params = _params(product)
     filters = []
-    for name in required:
+    for name in PASSIVE_SEARCH_PARAMETERS.get(top.get('Name'), []):
         param = params.get(name) or {}
         if param.get('ValueId') in (None, ''):
             continue
@@ -163,38 +177,18 @@ def _parametric_search(
     )
 
 
-def _rank_parametric(product: dict[str, Any], found: Optional[dict[str, Any]], need: int) -> list[dict[str, Any]]:
-    top, _ = _categories(product)
-    required, preferred = PASSIVE_PARAMETERS.get(top.get('Name'), ([], []))
-    params = _params(product)
-    original_tolerance = _percent((params.get('Tolerance') or {}).get('ValueText', ''))
-    scored = []
-    for candidate in (found or {}).get('Products') or []:
-        if _same_part(candidate, product):
-            continue
-        cparams = _params(candidate)
-        same = [n for n in required if n in params and n in cparams
-                and cparams[n].get('ValueText') == params[n].get('ValueText')]
-        matched = [n for n in preferred if n in params and n in cparams
-                   and cparams[n].get('ValueText') == params[n].get('ValueText')]
-        differs = [f'{n} {cparams[n].get("ValueText")} (was {params[n].get("ValueText")})'
-                   for n in required + preferred if n in params and n in cparams and n not in same + matched]
-        detail = 'same ' + ', '.join(params[n].get('ValueText', '') for n in same)
-        detail += f'; differs: {"; ".join(differs)}' if differs else '; other specs match'
-        alt = _alternative(candidate, need, 'parametric match', detail)
-        if not alt:
-            continue
-        tolerance = _percent((cparams.get('Tolerance') or {}).get('ValueText', ''))
-        alt['review'] = bool(original_tolerance is not None and tolerance is not None and tolerance > original_tolerance)
-        if alt['review']:
-            alt['detail'] = 'LOOSER tolerance, check the circuit; ' + alt['detail']
-        scored.append((alt['review'], -len(matched), alt))
-    scored.sort(key=lambda s: (s[0], not s[2]['orderable'], s[2]['status'] == 'marketplace', s[1], s[2]['unit_price'] or 1e9))
-    return [alt for _, _, alt in scored]
+def _from_parametric(product: dict[str, Any], found: Optional[dict[str, Any]], need: int) -> list[dict[str, Any]]:
+    out = []
+    for candidate in merge_listings((found or {}).get('Products') or []):
+        if not _same_part(candidate, product):
+            alt = _alternative(candidate, need, 'parametric match', product)
+            if alt:
+                out.append(alt)
+    return out
 
 
 def _tolerance_steps(product: dict[str, Any], need: int, dk: DigiKeyV4) -> list[str]:
-    """Tolerance value ids, from DigiKey's filter options, that are tighter than the original plus the next looser one."""
+    """Tolerance value ids, from DigiKey's filter options, tighter than the original plus the next looser one."""
     original = _percent((_params(product).get('Tolerance') or {}).get('ValueText', ''))
     if original is None:
         return []
@@ -210,29 +204,40 @@ def _tolerance_steps(product: dict[str, Any], need: int, dk: DigiKeyV4) -> list[
 
 
 def _dedupe(alts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen, out = set(), []
+    """One entry per part; when the same part came from two sources, keep the orderable one."""
+    best: dict[tuple, dict[str, Any]] = {}
     for alt in alts:
         key = (alt['mpn'].lower(), alt['manufacturer'].lower())
-        if key not in seen:
-            seen.add(key)
-            out.append(alt)
-    return out
+        if key not in best or (alt['orderable'] and not best[key]['orderable']):
+            best[key] = alt
+    return list(best.values())
+
+
+def _rank(alts: list[dict[str, Any]], original_manufacturer: str = '') -> list[dict[str, Any]]:
+    """Best first: orderable, verdict, fewest worse specs, same manufacturer as the original, DigiKey seller over
+    marketplace, then price."""
+    return sorted(_dedupe(alts), key=lambda a: (
+        not a['orderable'], VERDICT_RANK.get(a['verdict'], 9), a['worse_count'],
+        a['manufacturer'] != original_manufacturer, a['status'] == 'marketplace', a['unit_price'] or 1e9,
+    ))
 
 
 def find_alternatives(product: dict[str, Any], need: int, dk: DigiKeyV4) -> list[dict[str, Any]]:
     """Orderable replacements for a matched product that is out of stock, below MOQ, or marketplace-only."""
     alts = _from_substitutes(product, need, dk)
-    if _is_passive(product) and len([a for a in alts if a['orderable']]) < MAX_ALTERNATIVES:
-        alts += _rank_parametric(product, _parametric_search(product, need, dk), need)
-        if not any(a['orderable'] for a in alts):
-            # Precision parts are often reel-only: try tighter tolerances, then one step looser (flagged for review).
+
+    def drop_ins() -> int:
+        return len(_dedupe([a for a in alts if a['orderable'] and a['verdict'] == 'drop_in']))
+
+    # Passives: keep looking until there are a few orderable drop-ins to choose from (one search call each).
+    if _is_passive(product) and drop_ins() < MIN_DROP_INS:
+        alts += _from_parametric(product, _parametric_search(product, need, dk), need)
+        if not drop_ins():
+            # Precision parts are often reel-only: try tighter tolerances, then one step looser (judged "worse").
             steps = _tolerance_steps(product, need, dk)
             if steps:
-                alts += _rank_parametric(product, _parametric_search(product, need, dk, tolerance_ids=steps), need)
-    alts = _dedupe(alts)
-    # Stable sort: keeps DigiKey's / parameter ranking within each group.
-    alts.sort(key=lambda a: (not a['orderable'], a['review'], a['status'] == 'marketplace'))
-    return alts[:MAX_ALTERNATIVES]
+                alts += _from_parametric(product, _parametric_search(product, need, dk, tolerance_ids=steps), need)
+    return _rank(alts, (product.get('Manufacturer') or {}).get('Name', ''))[:MAX_ALTERNATIVES]
 
 
 def suggest_for_unmatched(candidates: list[tuple[str, str]], need: int, dk: DigiKeyV4) -> list[dict[str, Any]]:
@@ -240,10 +245,12 @@ def suggest_for_unmatched(candidates: list[tuple[str, str]], need: int, dk: Digi
     alts: list[dict[str, Any]] = []
     for mpn, _ in candidates[:2]:
         found = dk.keyword_search(mpn, limit=10)
-        for candidate in found.get('Products') or []:
+        for candidate in merge_listings(found.get('Products') or []):
             exact = (candidate.get('ManufacturerProductNumber') or '').lower() == mpn.lower()
             alt = _alternative(candidate, need, 'same part number, other manufacturer' if exact else 'keyword match')
             if alt:
+                if exact:
+                    alt['detail'] = 'same part number from another manufacturer; confirm it is the part you meant'
                 alts.append(alt)
     alts = _dedupe(alts)
     alts.sort(key=lambda a: (not a['orderable'], a['source'] != 'same part number, other manufacturer'))

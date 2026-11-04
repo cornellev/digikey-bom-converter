@@ -19,6 +19,7 @@ digikey-bom-converter/
 │  ├─ auth_service.py          # DigiKey client-credentials token helpers
 │  ├─ bom_service.py           # BOM parsing, column detection, part matching, per-line status
 │  ├─ alternatives.py          # In-stock replacements (DigiKey substitutes + parametric search)
+│  ├─ specs.py                 # Spec-by-spec comparison of a candidate vs the original -> verdict
 │  ├─ digikey_client.py        # DigiKey Product API client, packaging/variation choice
 │  ├─ storage.py               # Runtime cache for access tokens and API responses
 │  ├─ tests/                   # Unit tests (no DigiKey calls): python -m pytest tests
@@ -80,6 +81,13 @@ npm run dev
 
 The frontend can be accessed at: <http://localhost:5173>
 
+### 5. Tests
+
+```bash
+cd backend && python -m pytest tests          # matching, packaging and spec-judgement logic (no DigiKey calls)
+cd frontend && npm run test:e2e               # UI flow in Chrome with a mocked backend (no DigiKey calls)
+```
+
 ---
 
 ## How matching works
@@ -92,9 +100,15 @@ The frontend can be accessed at: <http://localhost:5173>
 3. **Packaging.** For `order_qty = Qty x boards`: Cut Tape, then Digi-Reel, then a full reel only if the order meets
    its minimum. DigiKey Marketplace (third-party) listings only if nothing else covers the quantity.
 4. **Alternatives** for lines that can't be ordered (out of stock, minimum order too high, marketplace-only, not
-   found): DigiKey's own substitutes first; for resistors, capacitors and inductors also a parametric search (same
-   value, package, tolerance, voltage/dielectric ...). Safe drop-ins are preselected in the UI. Anything marked
-   **REVIEW** (different package, looser tolerance, non-identical IC/transistor) is never preselected.
+   found): DigiKey's own substitutes, plus for resistors, capacitors and inductors a parametric search (same value,
+   package, tolerance, voltage/dielectric; then tighter or one-step-looser tolerance if nothing is orderable).
+5. **Judgement** (`backend/specs.py`): every candidate is compared spec by spec with the original part. Must-match
+   specs (package, value, topology, ...), ratings where higher is better (voltage, current, power), specs where lower
+   is better (tolerance, Rds(on), leakage), temperature range coverage, dielectric class, automotive qualification.
+   Verdicts: **drop-in** (same package, every listed spec equal or better: picked automatically), **probably fine**
+   (only minor specs worse, e.g. gate charge or Rds(on) gate-drive rating, or specs not listed), **worse spec**
+   (says which, with both values), **different package**. The UI shows each candidate with photo, verdict, spec
+   comparison, DigiKey page and datasheet; the user picks one or skips the line. Undecided lines stay out of the cart.
 
 DigiKey allows ~1000 API calls/day for the app; a 30-line BOM takes ~60 calls (fewer when cached for 1 h).
 
@@ -111,8 +125,9 @@ Columns appended to the converted BOM:
   choosing alternatives
 
 Downloads:
-- `[name]_digikey_cart_xN.csv` - `Digi-Key Part Number, Quantity, Customer Reference`, only orderable lines; upload it
-  in the DigiKey cart.
+- `[name]_digikey_cart_xN.csv` - `Digi-Key Part Number, Manufacturer Part Number, Quantity, Reference Designator`, only
+  orderable lines. Upload it in the DigiKey cart ("Upload a File"): start at row 2, and set Column 4 to
+  "Reference Designator" (DigiKey maps columns 1-3 itself but leaves 4 on "Skip"). Tested 2026-11-04: all lines accepted.
 - `[name]_digikey_bom_xN.xlsx` - full BOM + "DigiKey cart" + "Needs attention" sheets; `.csv` - full BOM only.
 
 Uploading a previously converted file works too: the appended columns are dropped and recomputed.

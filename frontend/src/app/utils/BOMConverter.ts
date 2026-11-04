@@ -34,8 +34,33 @@ export interface Alternative {
   status: MatchStatus;
   orderable: boolean;
   source: string;
+  /** Spec comparison with the original part: drop_in is the only verdict safe to use without review. */
+  verdict: Verdict;
   detail: string;
+  specs: SpecRow[];
+  worse_count: number;
   review: boolean;
+  url: string;
+  photo: string;
+  datasheet: string;
+}
+
+export type Verdict = 'drop_in' | 'check' | 'worse' | 'different_package' | 'unverified';
+
+export interface SpecRow {
+  name: string;
+  original: string;
+  candidate: string;
+  result: 'same' | 'better' | 'worse' | 'unknown';
+}
+
+/** Display fields for the matched DigiKey product. */
+export interface ProductCard {
+  mpn: string;
+  manufacturer: string;
+  description: string;
+  photo: string;
+  datasheet: string;
   url: string;
 }
 
@@ -55,6 +80,7 @@ export interface BOMItem {
   note: string;
   searchUrl: string;
   alternatives: Alternative[];
+  card: ProductCard | null;
   rawRow: Record<string, unknown>;
 }
 
@@ -68,9 +94,12 @@ export interface ConvertMeta {
   statuses: Record<string, number>;
   api_calls: number;
   api_rate_remaining: number | null;
+  cards: (ProductCard | null)[];
 }
 
-/** Index into item.alternatives, or -1 for the original part. */
+/** Choice per line: index into item.alternatives, ORIGINAL (keep the BOM part) or SKIP (leave the line out). */
+export const ORIGINAL = -1;
+export const SKIP = -2;
 export type Selections = Record<number, number>;
 
 function text(value: unknown): string {
@@ -82,7 +111,12 @@ function asNumber(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function normalizeRow(row: Record<string, unknown>, alternatives: Alternative[], meta: ConvertMeta): BOMItem {
+function normalizeRow(
+  row: Record<string, unknown>,
+  alternatives: Alternative[],
+  card: ProductCard | null,
+  meta: ConvertMeta,
+): BOMItem {
   const dkMpn = text(row['dk_mpn']);
   const price = asNumber(row['dk_unit_price'], Number.NaN);
   return {
@@ -101,6 +135,7 @@ function normalizeRow(row: Record<string, unknown>, alternatives: Alternative[],
     note: text(row['match_note']),
     searchUrl: text(row['dk_search_url']),
     alternatives,
+    card,
     rawRow: row,
   };
 }
@@ -135,7 +170,8 @@ export async function convertBOMViaBackend(
   const rows: Record<string, unknown>[] = Array.isArray(payload.rows) ? payload.rows : [];
   const alternatives: Alternative[][] = Array.isArray(payload.alternatives) ? payload.alternatives : [];
   const meta = payload as ConvertMeta;
-  return { items: rows.map((row, i) => normalizeRow(row, alternatives[i] || [], meta)), meta };
+  const cards = Array.isArray(meta.cards) ? meta.cards : [];
+  return { items: rows.map((row, i) => normalizeRow(row, alternatives[i] || [], cards[i] || null, meta)), meta };
 }
 
 /** What will actually be ordered for a line, given the user's choice of alternative. */
@@ -150,8 +186,13 @@ export interface ChosenPart {
   review: boolean;
 }
 
+/** Lines that can't be ordered as the BOM specifies; these need an alternative or a decision to skip. */
+export function needsDecision(item: BOMItem): boolean {
+  return item.status !== 'not_a_part' && !(ORDERABLE_STATUSES.includes(item.status) && item.dkpn);
+}
+
 export function chosenPart(item: BOMItem, selection: number | undefined): ChosenPart | null {
-  if (item.status === 'not_a_part') return null;
+  if (item.status === 'not_a_part' || selection === SKIP) return null;
   const alt = selection !== undefined && selection >= 0 ? item.alternatives[selection] : undefined;
   if (alt) {
     return {
@@ -177,12 +218,12 @@ export function chosenPart(item: BOMItem, selection: number | undefined): Chosen
   };
 }
 
-/** For lines that can't be ordered as-is, preselect the first orderable alternative that needs no review. */
+/** For lines that can't be ordered as-is, preselect the best orderable drop-in replacement (if there is one). */
 export function defaultSelections(items: BOMItem[]): Selections {
   const selections: Selections = {};
   items.forEach((item, index) => {
-    if (ORDERABLE_STATUSES.includes(item.status)) return;
-    const pick = item.alternatives.findIndex((alt) => alt.orderable && !alt.review);
+    if (!needsDecision(item)) return;
+    const pick = item.alternatives.findIndex((alt) => alt.orderable && alt.verdict === 'drop_in');
     if (pick >= 0) selections[index] = pick;
   });
   return selections;
@@ -190,8 +231,9 @@ export function defaultSelections(items: BOMItem[]): Selections {
 
 export interface CartLine {
   dkpn: string;
+  mpn: string;
   quantity: number;
-  reference: string;
+  designators: string;
 }
 
 /** DigiKey cart lines: one per DigiKey part number (duplicates merged), only for orderable choices. */
@@ -203,20 +245,22 @@ export function cartLines(items: BOMItem[], selections: Selections): CartLine[] 
     const existing = lines.get(part.dkpn);
     if (existing) {
       existing.quantity += item.orderQty;
-      existing.reference = [existing.reference, item.designators].filter(Boolean).join(', ');
+      existing.designators = [existing.designators, item.designators].filter(Boolean).join(', ');
     } else {
-      lines.set(part.dkpn, { dkpn: part.dkpn, quantity: item.orderQty, reference: item.designators });
+      lines.set(part.dkpn, { dkpn: part.dkpn, mpn: part.mpn, quantity: item.orderQty, designators: item.designators });
     }
   });
-  // DigiKey's customer reference field is short; keep the start of the designator list.
-  return [...lines.values()].map((line) => ({ ...line, reference: line.reference.slice(0, 48) }));
+  return [...lines.values()];
 }
 
+/** Column names match DigiKey's cart upload fields, so its auto-mapping picks the right field for each column
+ * (with only 3 columns it guessed the designators were manufacturer part numbers). */
 function cartRows(items: BOMItem[], selections: Selections) {
   return cartLines(items, selections).map((line) => ({
     'Digi-Key Part Number': line.dkpn,
+    'Manufacturer Part Number': line.mpn,
     Quantity: line.quantity,
-    'Customer Reference': line.reference,
+    'Reference Designator': line.designators,
   }));
 }
 
@@ -245,7 +289,7 @@ function fullRows(items: BOMItem[], selections: Selections) {
       order_dkpn: part?.orderable ? part.dkpn : '',
       order_mpn: part?.orderable ? part.mpn : '',
       order_manufacturer: part?.orderable ? part.manufacturer : '',
-      substituted: part?.substituted ? (part.review ? 'yes (needs review)' : 'yes') : '',
+      substituted: selections[index] === SKIP ? 'skipped' : part?.substituted ? (part.review ? 'yes (reviewed)' : 'yes (drop-in)') : '',
     };
   });
 }
@@ -257,16 +301,17 @@ export function exportToExcel(items: BOMItem[], selections: Selections, filename
 
   const attention = items.flatMap((item, index) => {
     const part = chosenPart(item, selections[index]);
-    if (!part || part.orderable) return [];
+    if (item.status === 'not_a_part' || part?.orderable) return [];
     return [{
       Designator: item.designators,
       'Part number': item.mpn,
       Status: item.status,
       Note: item.note,
       'Order qty': item.orderQty,
-      'Alternatives (MPN / DigiKey PN / stock)': item.alternatives
-        .map((alt) => `${alt.mpn} / ${alt.dkpn} / ${alt.stock}`)
-        .join('; '),
+      Decision: selections[index] === SKIP ? 'skipped' : 'undecided',
+      'Alternatives (MPN / DigiKey PN / stock / verdict)': item.alternatives
+        .map((alt) => `${alt.mpn} / ${alt.dkpn} / ${alt.stock} / ${alt.verdict}: ${alt.detail}`)
+        .join('\n'),
       'DigiKey search': item.searchUrl,
     }];
   });

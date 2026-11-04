@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from alternatives import find_alternatives, suggest_for_unmatched
+from alternatives import find_alternatives, product_card, suggest_for_unmatched
 from auth_service import ensure_valid_access_token, get_client_id
 from digikey_client import (
     V4_BASE,
@@ -19,6 +19,9 @@ from digikey_client import (
     locale_language,
     locale_ship_to_country,
     locale_site,
+    QuotaExceeded,
+    lookup_product,
+    merge_listings,
     pick_variation,
 )
 from storage import load_cache, save_cache
@@ -165,6 +168,8 @@ def resolve_product(candidates: list[tuple[str, str]], dk: DigiKeyV4) -> tuple[O
     for index, (mpn, hint) in enumerate(candidates):
         details = dk.productdetails_by_mpn(mpn)
         product = details.get('Product') if not details.get('__not_found__') else None
+        if not product and 'duplicate' in str(details.get('detail', '')).lower():
+            product = lookup_product(dk, mpn)  # same part listed twice by DigiKey, not several manufacturers
         if product:
             return product, 'exact' if index == 0 else 'part_number_column', f'matched {mpn} from the Part Number column'
         if 'duplicate' in str(details.get('detail', '')).lower():
@@ -183,13 +188,12 @@ def resolve_product(candidates: list[tuple[str, str]], dk: DigiKeyV4) -> tuple[O
 
 def _resolve_with_manufacturer(mpn: str, hint: str, dk: DigiKeyV4) -> Optional[dict[str, Any]]:
     found = dk.keyword_search(mpn, limit=50)
-    for product in found.get('Products') or []:
+    for product in merge_listings(found.get('Products') or []):
         manufacturer = product.get('Manufacturer') or {}
         if (product.get('ManufacturerProductNumber') or '').lower() == mpn.lower() and manufacturer_matches(
             hint, manufacturer.get('Name', '')
         ):
-            details = dk.productdetails_by_mpn(mpn, manufacturer_id=manufacturer.get('Id'))
-            return details.get('Product') or product
+            return lookup_product(dk, mpn, manufacturer.get('Id')) or product
     return None
 
 
@@ -198,6 +202,7 @@ def process_line(line: dict[str, Any], need: int, dk: DigiKeyV4, with_alternativ
     out['qty_per_board'] = line['qty']
     out['order_qty'] = need
     out['alternatives'] = []
+    out['card'] = None
     candidates = line['candidates']
     out['dk_search_url'] = build_dk_search_url(candidates[0][0]) if candidates else ''
 
@@ -216,6 +221,7 @@ def process_line(line: dict[str, Any], need: int, dk: DigiKeyV4, with_alternativ
             return out
 
         variation, status = pick_variation(product, need)
+        out['card'] = product_card(product)
         out['dk_mpn'] = product.get('ManufacturerProductNumber', '')
         out['dk_manufacturer'] = (product.get('Manufacturer') or {}).get('Name', '')
         out['dk_search_url'] = build_dk_search_url(out['dk_mpn'] or candidates[0][0])
@@ -239,6 +245,8 @@ def process_line(line: dict[str, Any], need: int, dk: DigiKeyV4, with_alternativ
         if with_alternatives and status in BLOCKING_STATUSES | {'marketplace'}:
             out['alternatives'] = find_alternatives(product, need, dk)
         return out
+    except QuotaExceeded:
+        raise  # no point continuing: every other line would fail the same way
     except Exception as exc:  # one bad line should not fail the whole BOM
         out['match_status'] = 'error'
         out['match_note'] = str(exc)[:300]
@@ -302,13 +310,16 @@ def convert_uploaded_bom(
     dk = _build_dk_client(access_token, cache)
 
     max_workers = max(1, min(int(workers), 8))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = list(executor.map(
-            lambda line: process_line(line, line['qty'] * boards, dk, with_alternatives), lines
-        ))
-    save_cache(cache)
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(
+                lambda line: process_line(line, line['qty'] * boards, dk, with_alternatives), lines
+            ))
+    finally:
+        save_cache(cache)  # keep what was fetched, so a re-run after the quota resets costs fewer calls
 
     alternatives = [r.pop('alternatives') for r in results]
+    cards = [r.pop('card') for r in results]
     for col in OUTPUT_COLUMNS:
         frame[col] = [r[col] for r in results]
 
@@ -330,4 +341,5 @@ def convert_uploaded_bom(
         'api_calls': dk.calls,
         'api_rate_remaining': dk.rate_remaining,
     }
+    meta['cards'] = cards
     return rows, alternatives, meta

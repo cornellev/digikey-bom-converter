@@ -94,3 +94,61 @@ def test_pick_reports_out_of_stock_and_marketplace():
     assert pick_variation({'ProductVariations': [_variation('CT', 'Cut Tape (CT)', 3)]}, 10)[1] == 'low_stock'
     market = {'ProductVariations': [_variation('M', 'Cut Tape (CT)', 100, marketplace=True)]}
     assert pick_variation(market, 10)[1] == 'marketplace'
+
+
+# DigiKey sometimes lists one part twice (different supplier prefixes); only one listing may have cut tape.
+REEL_ONLY = {'ManufacturerProductNumber': 'GMC10X5R226M16NT', 'Manufacturer': {'Id': 4713, 'Name': 'Cal-Chip'},
+             'ProductVariations': [_variation('2571-TR-ND', 'Tape & Reel (TR)', 688000, moq=4000)]}
+WITH_CUT_TAPE = {'ManufacturerProductNumber': 'GMC10X5R226M16NT', 'Manufacturer': {'Id': 4713, 'Name': 'Cal-Chip'},
+                 'ProductVariations': [_variation('4713-TR-ND', 'Tape & Reel (TR)', 4000, moq=4000),
+                                       _variation('4713-CT-ND', 'Cut Tape (CT)', 4337)]}
+
+
+def test_duplicate_listings_are_merged_before_choosing_packaging():
+    from digikey_client import merge_listings
+    merged = merge_listings([REEL_ONLY, WITH_CUT_TAPE])
+    assert len(merged) == 1
+    variation, status = pick_variation(merged[0], 20)
+    assert (variation['dkpn'], status) == ('4713-CT-ND', 'ok')
+
+
+class FakeDigiKey:
+    """productdetails says "Duplicate Products found" (as DigiKey does for double listings); keyword search works."""
+
+    def productdetails_by_mpn(self, mpn, manufacturer_id=None):
+        return {'__not_found__': True, 'detail': f'Duplicate Products found for {mpn.lower()}.'}
+
+    def keyword_search(self, keywords, limit=5, filters=None, sort=None):
+        other = {'ManufacturerProductNumber': 'GMC10X5R226M16NT-X', 'Manufacturer': {'Id': 1}, 'ProductVariations': []}
+        return {'Products': [REEL_ONLY, other, WITH_CUT_TAPE]}
+
+
+def test_lookup_merges_double_listing_instead_of_calling_it_ambiguous():
+    from bom_service import resolve_product
+    from digikey_client import lookup_product
+    product = lookup_product(FakeDigiKey(), 'GMC10X5R226M16NT', 4713)
+    assert {v['DigiKeyProductNumber'] for v in product['ProductVariations']} == {'2571-TR-ND', '4713-TR-ND', '4713-CT-ND'}
+    found, how, _ = resolve_product([('GMC10X5R226M16NT', '')], FakeDigiKey())
+    assert found is not None and how == 'exact'
+
+
+def test_quota_message_and_long_retry_after_does_not_sleep(monkeypatch):
+    import digikey_client
+    from digikey_client import DigiKeyV4, QuotaExceeded
+
+    assert 'in about 3 h 20 min' in str(QuotaExceeded(12000))
+    assert 'resets daily' in str(QuotaExceeded(None))
+
+    class Response:
+        status_code = 429
+        headers = {'Retry-After': '12000'}
+        text = ''
+
+    dk = DigiKeyV4('id', 'token', 'https://example.invalid', 'US', 'en', 'USD', 'us')
+    monkeypatch.setattr(dk.session, 'request', lambda *a, **k: Response())
+    monkeypatch.setattr(digikey_client.time, 'sleep', lambda s: (_ for _ in ()).throw(AssertionError('slept')))
+    try:
+        dk.productdetails_by_mpn('X')
+        raise AssertionError('expected QuotaExceeded')
+    except QuotaExceeded as exc:
+        assert exc.retry_after_s == 12000

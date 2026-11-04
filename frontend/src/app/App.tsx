@@ -249,13 +249,15 @@ function App() {
                 <li>Upload your Altium-exported BOM (Excel or CSV with manufacturer part numbers and quantities).</li>
                 <li>Set the number of boards and click "Convert to DigiKey BOM".</li>
                 <li>
-                  Check the lines marked red. Out-of-stock or unmatched parts come with in-stock alternatives; safe
-                  drop-ins are preselected, and anything marked REVIEW (different package, looser tolerance, or a
-                  non-identical IC) is left for you to decide.
+                  Review "Parts that can't be ordered as specified". Every in-stock candidate is compared spec by spec
+                  with the original part (photo, datasheet and DigiKey link included). True drop-ins are picked
+                  automatically; for the rest, choose one or skip the line.
                 </li>
                 <li>
                   Download the <span className="font-semibold">DigiKey cart CSV</span> and upload it in the DigiKey
-                  cart (Upload a file / BOM upload). It only contains lines that can actually be ordered.
+                  cart ("Upload a File"). On the mapping screen, start at row 2 and set Column 4 to{' '}
+                  <span className="font-semibold">Reference Designator</span> (DigiKey leaves it on "Skip"). The file
+                  only contains lines that can actually be ordered.
                 </li>
               </ol>
             </article>
@@ -264,8 +266,8 @@ function App() {
               <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">Downloads:</h3>
               <ul className="list-disc space-y-2 pl-5 text-[#41464f]">
                 <li>
-                  <span className="font-semibold">DigiKey cart CSV</span>: Digi-Key Part Number, Quantity (per board ×
-                  boards), Customer Reference (designators).
+                  <span className="font-semibold">DigiKey cart CSV</span>: Digi-Key Part Number, Manufacturer Part Number,
+                  Quantity (per board × boards), Reference Designator.
                 </li>
                 <li>
                   <span className="font-semibold">Full Excel</span>: your BOM with DigiKey columns appended

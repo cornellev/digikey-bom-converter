@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from auth_service import get_auth_status
 from bom_service import convert_uploaded_bom
+from digikey_client import QuotaExceeded
 
 app = FastAPI(title='DigiKey BOM Converter Backend', version='0.2.0')
 app.add_middleware(
@@ -62,5 +63,7 @@ async def convert(
             with_alternatives=alternatives,
         )
         return {'rows': rows, 'alternatives': row_alternatives, **meta}
+    except QuotaExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

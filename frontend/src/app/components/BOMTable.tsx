@@ -9,14 +9,16 @@ import {
   TableRow,
 } from './ui/table';
 import {
-  Alternative,
   BOMItem,
   ConvertMeta,
   MatchStatus,
+  SKIP,
   Selections,
   cartLines,
   chosenPart,
+  needsDecision,
 } from '../utils/BOMConverter';
+import { DecisionPanel, VERDICT_STYLE } from './DecisionPanel';
 
 interface BOMTableProps {
   data: BOMItem[];
@@ -44,12 +46,6 @@ function price(value: number | null): string {
   return value === null || value === undefined ? '—' : `$${value.toFixed(value < 1 ? 3 : 2)}`;
 }
 
-function altLabel(alt: Alternative): string {
-  const flags = [alt.review ? 'REVIEW' : '', alt.orderable ? '' : 'not orderable'].filter(Boolean).join(', ');
-  return `${alt.mpn} (${alt.manufacturer}) · ${alt.stock.toLocaleString()} in stock · ${price(alt.unit_price)}`
-    + (flags ? ` · ${flags}` : '');
-}
-
 export function BOMTable({
   data,
   meta,
@@ -67,7 +63,7 @@ export function BOMTable({
   const ready = parts.filter((p) => p?.orderable).length;
   const skipped = parts.filter((p) => p === null).length;
   const attention = data.length - ready - skipped;
-  const review = parts.filter((p) => p?.orderable && p.review).length;
+  const substituted = parts.filter((p) => p?.orderable && p.substituted).length;
   const cartCount = cartLines(data, selections).length;
   const total = data.reduce((sum, item, index) => {
     const part = parts[index];
@@ -98,16 +94,28 @@ export function BOMTable({
 
       <div className="flex flex-wrap gap-3 text-sm">
         <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-800">{ready} ready for the cart</span>
-        {attention > 0 && (
-          <span className="rounded-full bg-red-100 px-3 py-1 text-red-800">{attention} need a decision (not in cart)</span>
+        {substituted > 0 && (
+          <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">{substituted} of them substituted</span>
         )}
-        {review > 0 && (
-          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-800">{review} substitutes marked for review</span>
+        {attention > 0 && (
+          <a href="#decisions" className="rounded-full bg-red-100 px-3 py-1 text-red-800 hover:underline">
+            {attention} undecided (not in cart)
+          </a>
         )}
         {skipped > 0 && <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">{skipped} skipped</span>}
         <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">≈ {price(total)} at listed prices</span>
+        {meta.api_rate_remaining !== null && meta.api_rate_remaining < 150 && (
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-800">
+            DigiKey API quota low: {meta.api_rate_remaining} calls left today (a BOM takes ~70)
+          </span>
+        )}
       </div>
 
+      <div id="decisions">
+        <DecisionPanel data={data} selections={selections} onSelect={onSelect} />
+      </div>
+
+      <h2 className="pt-2 text-2xl tracking-tight text-[#1b1f27]">Full BOM</h2>
       <div className="overflow-hidden rounded-2xl border border-black/10">
         <div className="overflow-x-auto">
           <Table className="min-w-[66rem] table-fixed">
@@ -174,27 +182,23 @@ export function BOMTable({
                     <TableCell className="whitespace-normal px-3 py-3 text-sm text-[#353b45]">
                       <span className={`rounded-full px-2 py-0.5 text-xs ${status.className}`}>{status.label}</span>
                       {item.note && <div className="mt-1 text-xs text-[#5b616c]">{item.note}</div>}
-                      {item.alternatives.length > 0 && (
-                        <div className="mt-2 space-y-1">
-                          <select
-                            value={selection}
-                            onChange={(e) => onSelect(index, Number(e.target.value))}
-                            className="w-full truncate rounded-lg border border-black/15 bg-white px-2 py-1 text-xs"
-                          >
-                            <option value={-1}>
-                              Keep {item.mpn || 'original'}{part && !alt && !part.orderable ? ' (not ordered)' : ''}
-                            </option>
-                            {item.alternatives.map((a, i) => (
-                              <option key={a.dkpn} value={i}>
-                                {altLabel(a)}
-                              </option>
-                            ))}
-                          </select>
-                          {alt && (
-                            <div className={`text-xs ${alt.review ? 'text-amber-800' : 'text-[#5b616c]'}`}>
-                              {alt.source}{alt.detail ? `: ${alt.detail}` : ''}
-                            </div>
-                          )}
+                      {needsDecision(item) && (
+                        <div className="mt-1 text-xs">
+                          {selection === SKIP ? (
+                            <span className="text-slate-600">Skipped by you</span>
+                          ) : alt ? (
+                            <span className="text-emerald-700">
+                              → {alt.mpn}{' '}
+                              <span className={`rounded-full px-1.5 ${VERDICT_STYLE[alt.verdict]?.className ?? ''}`}>
+                                {VERDICT_STYLE[alt.verdict]?.label ?? alt.verdict}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="text-red-700">Undecided</span>
+                          )}{' '}
+                          <a href={`#decide-${index}`} className="text-[#2b3039] underline">
+                            {alt || selection === SKIP ? 'change' : 'decide'}
+                          </a>
                         </div>
                       )}
                     </TableCell>
