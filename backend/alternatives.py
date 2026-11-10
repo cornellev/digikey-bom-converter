@@ -11,6 +11,7 @@ Every candidate is then compared spec by spec with the original (`specs.compare_
 """
 
 import re
+import urllib.parse
 from typing import Any, Optional
 
 from digikey_client import DigiKeyV4, build_dk_search_url, lookup_product, merge_listings, pick_variation
@@ -255,3 +256,46 @@ def suggest_for_unmatched(candidates: list[tuple[str, str]], need: int, dk: Digi
     alts = _dedupe(alts)
     alts.sort(key=lambda a: (not a['orderable'], a['source'] != 'same part number, other manufacturer'))
     return alts[:MAX_ALTERNATIVES]
+
+
+class ManualLookupError(ValueError):
+    """A pasted replacement that can't be used; the message is shown to the user as-is."""
+
+
+def parse_part_query(text: str) -> str:
+    """Part number from what the user pasted: a DigiKey product link, a DigiKey part number or an MPN.
+
+    Links look like digikey.com/en/products/detail/<manufacturer>/<mpn>/<id> (older: /product-detail/en/<mfr>/<mpn>/...).
+    """
+    text = (text or '').strip()
+    if not text:
+        raise ManualLookupError('Paste a DigiKey link, DigiKey part number or manufacturer part number.')
+    if not re.match(r'^(https?://|www\.|[a-z0-9-]+\.(com|net|org|io|co\.uk|de|cn)/)', text, re.IGNORECASE):
+        return text
+    url = urllib.parse.urlparse(text if '://' in text else 'https://' + text)
+    if not url.netloc.lower().endswith('digikey.com'):
+        raise ManualLookupError(
+            'Only DigiKey parts can go in the DigiKey cart. To buy it elsewhere, use "Skip this line" and add a note.'
+        )
+    segments = [urllib.parse.unquote(s) for s in url.path.split('/') if s]
+    for marker, offset in (('detail', 2), ('product-detail', 3)):
+        if marker in segments and len(segments) > segments.index(marker) + offset:
+            return segments[segments.index(marker) + offset]
+    raise ManualLookupError('That DigiKey link is not a product page. Open the part and copy the link from there.')
+
+
+def manual_replacement(
+    query: str, need: int, dk: DigiKeyV4, original: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
+    """A user-supplied replacement, judged against the original exactly like the automatic suggestions."""
+    part = parse_part_query(query)
+    product = lookup_product(dk, part)
+    if not product:
+        raise ManualLookupError(
+            f'No single DigiKey product for "{part}" (not found, or made by several manufacturers). '
+            'Paste the link to the DigiKey product page instead.'
+        )
+    alt = _alternative(product, need, 'your pick', original)
+    if not alt:
+        raise ManualLookupError(f'{product.get("ManufacturerProductNumber", part)} has no DigiKey listing to order from.')
+    return alt

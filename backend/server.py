@@ -5,9 +5,11 @@ load_dotenv()
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from auth_service import get_auth_status
-from bom_service import convert_uploaded_bom
+from alternatives import ManualLookupError
+from bom_service import convert_uploaded_bom, lookup_replacement
 from digikey_client import QuotaExceeded
 
 app = FastAPI(title='DigiKey BOM Converter Backend', version='0.2.0')
@@ -63,6 +65,26 @@ async def convert(
             with_alternatives=alternatives,
         )
         return {'rows': rows, 'alternatives': row_alternatives, **meta}
+    except QuotaExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class LookupRequest(BaseModel):
+    query: str
+    need: int = 1
+    original_mpn: str = ''
+    original_manufacturer: str = ''
+
+
+@app.post('/lookup')
+def lookup(request: LookupRequest) -> dict:
+    """A replacement part the user pasted (DigiKey link, DigiKey part number or MPN), spec-checked like the others."""
+    try:
+        return lookup_replacement(request.query, request.need, request.original_mpn, request.original_manufacturer)
+    except ManualLookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except QuotaExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception as exc:

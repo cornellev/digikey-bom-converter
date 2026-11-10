@@ -1,4 +1,4 @@
-import { Download, ShoppingCart, ExternalLink } from 'lucide-react';
+import { ShoppingCart, ExternalLink } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   Table,
@@ -13,10 +13,12 @@ import {
   ConvertMeta,
   MatchStatus,
   SKIP,
+  Alternative,
   Selections,
   cartLines,
   chosenPart,
   needsDecision,
+  undecidedLines,
 } from '../utils/BOMConverter';
 import { DecisionPanel, VERDICT_STYLE } from './DecisionPanel';
 
@@ -25,9 +27,8 @@ interface BOMTableProps {
   meta: ConvertMeta;
   selections: Selections;
   onSelect: (index: number, choice: number) => void;
+  onManual: (index: number, alt: Alternative) => void;
   onDownloadCart: () => void;
-  onDownloadExcel: () => void;
-  onDownloadCSV: () => void;
 }
 
 const STATUS_LABEL: Record<MatchStatus, { label: string; className: string }> = {
@@ -51,9 +52,8 @@ export function BOMTable({
   meta,
   selections,
   onSelect,
+  onManual,
   onDownloadCart,
-  onDownloadExcel,
-  onDownloadCSV,
 }: BOMTableProps) {
   if (data.length === 0) {
     return null;
@@ -62,7 +62,8 @@ export function BOMTable({
   const parts = data.map((item, index) => chosenPart(item, selections[index]));
   const ready = parts.filter((p) => p?.orderable).length;
   const skipped = parts.filter((p) => p === null).length;
-  const attention = data.length - ready - skipped;
+  const undecided = undecidedLines(data, selections);
+  const attention = undecided.length;
   const substituted = parts.filter((p) => p?.orderable && p.substituted).length;
   const cartCount = cartLines(data, selections).length;
   const total = data.reduce((sum, item, index) => {
@@ -77,17 +78,14 @@ export function BOMTable({
           DigiKey BOM for {meta.boards} board{meta.boards === 1 ? '' : 's'}
         </h2>
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={onDownloadCart} className="gap-2 rounded-full bg-[#c91118] px-5 text-white hover:bg-[#a40e14]">
+          <Button
+            onClick={onDownloadCart}
+            disabled={attention > 0}
+            title={attention > 0 ? 'Decide every line first: pick a part or skip it' : undefined}
+            className="gap-2 rounded-full bg-[#c91118] px-5 text-white hover:bg-[#a40e14]"
+          >
             <ShoppingCart className="w-4 h-4" />
-            DigiKey cart CSV ({cartCount})
-          </Button>
-          <Button onClick={onDownloadExcel} variant="outline" className="gap-2 rounded-full border-black/20 bg-white px-5 text-[#1f232b] hover:bg-[#efeff2]">
-            <Download className="w-4 h-4" />
-            Full Excel
-          </Button>
-          <Button onClick={onDownloadCSV} variant="outline" className="gap-2 rounded-full border-black/20 bg-white px-5 text-[#1f232b] hover:bg-[#efeff2]">
-            <Download className="w-4 h-4" />
-            Full CSV
+            {attention > 0 ? `DigiKey cart CSV (decide ${attention} line${attention === 1 ? '' : 's'} first)` : `DigiKey cart CSV (${cartCount})`}
           </Button>
         </div>
       </div>
@@ -98,7 +96,7 @@ export function BOMTable({
           <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">{substituted} of them substituted</span>
         )}
         {attention > 0 && (
-          <a href="#decisions" className="rounded-full bg-red-100 px-3 py-1 text-red-800 hover:underline">
+          <a href={`#decide-${undecided[0]}`} className="rounded-full bg-red-100 px-3 py-1 text-red-800 hover:underline">
             {attention} undecided (not in cart)
           </a>
         )}
@@ -112,7 +110,12 @@ export function BOMTable({
       </div>
 
       <div id="decisions">
-        <DecisionPanel data={data} selections={selections} onSelect={onSelect} />
+        <DecisionPanel
+          data={data}
+          selections={selections}
+          onSelect={onSelect}
+          onManual={onManual}
+        />
       </div>
 
       <h2 className="pt-2 text-2xl tracking-tight text-[#1b1f27]">Full BOM</h2>

@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from alternatives import find_alternatives, product_card, suggest_for_unmatched
+from alternatives import find_alternatives, manual_replacement, product_card, suggest_for_unmatched
 from auth_service import ensure_valid_access_token, get_client_id
 from digikey_client import (
     V4_BASE,
@@ -343,3 +343,17 @@ def convert_uploaded_bom(
     }
     meta['cards'] = cards
     return rows, alternatives, meta
+
+
+def lookup_replacement(query: str, need: int, original_mpn: str = '', original_manufacturer: str = '') -> dict[str, Any]:
+    """Look up a replacement the user pasted for one BOM line and compare it with that line's part (if it had one)."""
+    cache = load_cache()
+    dk = _build_dk_client(ensure_valid_access_token(), cache)
+    try:
+        original = None
+        if original_mpn:
+            original, _, _ = resolve_product([(original_mpn, original_manufacturer)], dk)
+        alt = manual_replacement(query, max(1, int(need)), dk, original)
+    finally:
+        save_cache(cache)
+    return {**alt, 'api_calls': dk.calls, 'api_rate_remaining': dk.rate_remaining}

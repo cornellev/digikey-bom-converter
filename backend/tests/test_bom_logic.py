@@ -152,3 +152,18 @@ def test_quota_message_and_long_retry_after_does_not_sleep(monkeypatch):
         raise AssertionError('expected QuotaExceeded')
     except QuotaExceeded as exc:
         assert exc.retry_after_s == 12000
+
+
+def test_parse_part_query_accepts_links_part_numbers_and_rejects_other_sites():
+    import pytest
+    from alternatives import ManualLookupError, parse_part_query
+
+    assert parse_part_query('https://www.digikey.com/en/products/detail/yageo/RC0603FR-0710KL/727212') == 'RC0603FR-0710KL'
+    assert parse_part_query('digikey.com/en/products/detail/texas-instruments/LMR38010FDDAR/16611935?s=x') == (
+        'LMR38010FDDAR'
+    )
+    assert parse_part_query('https://www.digikey.com/product-detail/en/vishay/CRCW0603%2F10K/541-10K/123') == 'CRCW0603/10K'
+    assert parse_part_query('  311-10.0KHRCT-ND ') == '311-10.0KHRCT-ND'
+    for bad in ('https://www.mouser.com/ProductDetail/71-CRCW060310K0FKEA', 'https://www.digikey.com/en/products', ''):
+        with pytest.raises(ManualLookupError):
+            parse_part_query(bad)

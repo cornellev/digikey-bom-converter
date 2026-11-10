@@ -1,11 +1,23 @@
 import { useState } from 'react';
-import { CheckCircle2, ExternalLink, FileText, ImageOff } from 'lucide-react';
-import { Alternative, BOMItem, ORIGINAL, SKIP, Selections, Verdict, needsDecision } from '../utils/BOMConverter';
+import { CheckCircle2, ExternalLink, FileText, ImageOff, RefreshCw } from 'lucide-react';
+import {
+  Alternative,
+  BOMItem,
+  MANUAL_SOURCE,
+  ORIGINAL,
+  SKIP,
+  Selections,
+  Verdict,
+  lookupReplacement,
+  needsDecision,
+} from '../utils/BOMConverter';
 
 interface DecisionPanelProps {
   data: BOMItem[];
   selections: Selections;
   onSelect: (index: number, choice: number) => void;
+  /** Add (or replace) the user's own pasted replacement for a line. */
+  onManual: (index: number, alt: Alternative) => void;
 }
 
 export const VERDICT_STYLE: Record<Verdict, { label: string; className: string }> = {
@@ -88,6 +100,9 @@ function AlternativeCard({ alt, chosen, onChoose }: { alt: Alternative; chosen: 
           </a>
           <div className="text-xs text-[#6b717c]">{alt.manufacturer}</div>
           <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${verdict.className}`}>{verdict.label}</span>
+          {alt.source === MANUAL_SOURCE && (
+            <span className="ml-1 mt-1 inline-block rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-800">your pick</span>
+          )}
         </div>
       </div>
       <div className="mt-2 text-xs text-[#4b515c]">{alt.detail}</div>
@@ -128,7 +143,58 @@ function AlternativeCard({ alt, chosen, onChoose }: { alt: Alternative; chosen: 
   );
 }
 
-export function DecisionPanel({ data, selections, onSelect }: DecisionPanelProps) {
+/** Paste a DigiKey link / part number; the backend spec-checks it against the original like the suggestions. */
+function ManualEntry({ item, onFound }: { item: BOMItem; onFound: (alt: Alternative) => void }) {
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!query.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      onFound(await lookupReplacement(query.trim(), item));
+      setQuery('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Lookup failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-3">
+      <form
+        className="flex flex-wrap gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Know a better part? Paste a DigiKey link or part number"
+          aria-label="Replacement part"
+          className="min-w-0 flex-1 rounded-full border border-black/20 bg-white px-4 py-1.5 text-sm"
+        />
+        <button
+          type="submit"
+          disabled={busy || !query.trim()}
+          className="inline-flex items-center gap-1 rounded-full border border-black/20 bg-white px-4 py-1.5 text-xs font-medium hover:bg-[#efeff2] disabled:cursor-not-allowed disabled:text-[#a3a8b1]"
+        >
+          {busy && <RefreshCw className="h-3 w-3 animate-spin" />}
+          Check part
+        </button>
+      </form>
+      {error && <p className="mt-1 text-xs text-red-700">{error}</p>}
+    </div>
+  );
+}
+
+export function DecisionPanel({ data, selections, onSelect, onManual }: DecisionPanelProps) {
   const lines = data.map((item, index) => ({ item, index })).filter(({ item }) => needsDecision(item));
   if (lines.length === 0) return null;
   const undecided = lines.filter(({ index }) => (selections[index] ?? ORIGINAL) === ORIGINAL).length;
@@ -141,7 +207,8 @@ export function DecisionPanel({ data, selections, onSelect }: DecisionPanelProps
         </h2>
         <p className="mt-1 text-sm text-[#4b515c]">
           Each candidate was compared spec by spec with the original. <b>Drop-ins</b> (same package, every listed spec
-          equal or better) were picked automatically; anything else needs your call. Undecided lines stay out of the cart.
+          equal or better) were picked automatically; anything else needs your call: pick a suggestion, paste your own
+          DigiKey part, or skip the line. The cart CSV unlocks once every line is decided.
           {undecided > 0 && <span className="font-semibold text-red-700"> {undecided} still undecided.</span>}
         </p>
       </div>
@@ -220,9 +287,11 @@ export function DecisionPanel({ data, selections, onSelect }: DecisionPanelProps
               </div>
             ) : (
               <p className="mt-3 text-sm text-[#5b616c]">
-                No in-stock replacement on DigiKey. Wait for stock, buy it from another distributor, or skip the line.
+                No in-stock replacement found on DigiKey. Paste one below, or skip the line (e.g. to buy it elsewhere).
               </p>
             )}
+
+            <ManualEntry item={item} onFound={(alt) => onManual(index, alt)} />
           </section>
         );
       })}

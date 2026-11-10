@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 
 export const BACKEND_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
@@ -101,6 +100,8 @@ export interface ConvertMeta {
 export const ORIGINAL = -1;
 export const SKIP = -2;
 export type Selections = Record<number, number>;
+/** Source label of a replacement the user pasted in themselves. */
+export const MANUAL_SOURCE = 'your pick';
 
 function text(value: unknown): string {
   return value === undefined || value === null ? '' : String(value).trim();
@@ -174,6 +175,26 @@ export async function convertBOMViaBackend(
   return { items: rows.map((row, i) => normalizeRow(row, alternatives[i] || [], cards[i] || null, meta)), meta };
 }
 
+/** Look up a replacement the user pasted (DigiKey link, DigiKey part number or MPN) for one BOM line. The backend
+ * compares it with the line's original part like the automatic suggestions. */
+export async function lookupReplacement(query: string, item: BOMItem): Promise<Alternative> {
+  const response = await fetch(`${BACKEND_BASE}/lookup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      need: item.orderQty,
+      original_mpn: item.card?.mpn || '',
+      original_manufacturer: item.card?.manufacturer || '',
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.detail || `Lookup failed (${response.status}).`);
+  }
+  return payload as Alternative;
+}
+
 /** What will actually be ordered for a line, given the user's choice of alternative. */
 export interface ChosenPart {
   dkpn: string;
@@ -216,6 +237,14 @@ export function chosenPart(item: BOMItem, selection: number | undefined): Chosen
     substituted: false,
     review: false,
   };
+}
+
+/** Lines that still need a decision: can't be ordered as chosen and not skipped. The cart CSV waits for these. */
+export function undecidedLines(items: BOMItem[], selections: Selections): number[] {
+  return items.flatMap((item, index) => {
+    const part = chosenPart(item, selections[index]);
+    return part && !part.orderable ? [index] : [];
+  });
 }
 
 /** For lines that can't be ordered as-is, preselect the best orderable drop-in replacement (if there is one). */
@@ -278,50 +307,5 @@ function download(blob: Blob, filename: string) {
 
 export function exportCartCSV(items: BOMItem[], selections: Selections, filename: string) {
   const csv = Papa.unparse(cartRows(items, selections));
-  download(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), filename);
-}
-
-function fullRows(items: BOMItem[], selections: Selections) {
-  return items.map((item, index) => {
-    const part = chosenPart(item, selections[index]);
-    return {
-      ...item.rawRow,
-      order_dkpn: part?.orderable ? part.dkpn : '',
-      order_mpn: part?.orderable ? part.mpn : '',
-      order_manufacturer: part?.orderable ? part.manufacturer : '',
-      substituted: selections[index] === SKIP ? 'skipped' : part?.substituted ? (part.review ? 'yes (reviewed)' : 'yes (drop-in)') : '',
-    };
-  });
-}
-
-export function exportToExcel(items: BOMItem[], selections: Selections, filename: string) {
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(fullRows(items, selections)), 'BOM');
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(cartRows(items, selections)), 'DigiKey cart');
-
-  const attention = items.flatMap((item, index) => {
-    const part = chosenPart(item, selections[index]);
-    if (item.status === 'not_a_part' || part?.orderable) return [];
-    return [{
-      Designator: item.designators,
-      'Part number': item.mpn,
-      Status: item.status,
-      Note: item.note,
-      'Order qty': item.orderQty,
-      Decision: selections[index] === SKIP ? 'skipped' : 'undecided',
-      'Alternatives (MPN / DigiKey PN / stock / verdict)': item.alternatives
-        .map((alt) => `${alt.mpn} / ${alt.dkpn} / ${alt.stock} / ${alt.verdict}: ${alt.detail}`)
-        .join('\n'),
-      'DigiKey search': item.searchUrl,
-    }];
-  });
-  if (attention.length) {
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(attention), 'Needs attention');
-  }
-  XLSX.writeFile(workbook, filename);
-}
-
-export function exportToCSV(items: BOMItem[], selections: Selections, filename: string) {
-  const csv = Papa.unparse(fullRows(items, selections));
   download(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), filename);
 }

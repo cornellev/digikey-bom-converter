@@ -67,7 +67,45 @@ test('drop-ins are auto-picked; everything else waits for a decision', async ({ 
   await expect(page.getByText('2 undecided (not in cart)')).toBeVisible(); // GONE-FET (only "check"), GONE-IC (none)
   await expect(section(page, 'GONE-CAP').getByText('Using CAP-DROPIN (drop-in)')).toBeVisible();
   await expect(section(page, 'GONE-FET').getByText('Undecided: not in the cart yet')).toBeVisible();
-  await expect(section(page, 'GONE-IC').getByText('No in-stock replacement on DigiKey')).toBeVisible();
+  await expect(section(page, 'GONE-IC').getByText('No in-stock replacement found on DigiKey')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'DigiKey cart CSV (decide 2 lines first)' })).toBeDisabled();
+});
+
+test('pasted replacement is spec-checked and used; cart unlocks once every line is decided', async ({ page }) => {
+  let lookupBody: Record<string, unknown> = {};
+  await page.route('**/lookup', (route) => {
+    lookupBody = route.request().postDataJSON();
+    route.fulfill({ json: alternative('IC-MINE', 'ICMINE-CT-ND', 'check', { source: 'manual' }) });
+  });
+  await convert(page);
+  const ic = section(page, 'GONE-IC');
+  await ic.getByLabel('Replacement part').fill('https://www.digikey.com/en/products/detail/acme/IC-MINE/123');
+  await ic.getByRole('button', { name: 'Check part' }).click();
+  await expect(ic.getByText('Using IC-MINE (your choice)')).toBeVisible();
+  await expect(ic.getByText('your pick', { exact: true })).toBeVisible();
+  expect(lookupBody).toMatchObject({ need: 2, query: 'https://www.digikey.com/en/products/detail/acme/IC-MINE/123' });
+
+  await expect(page.getByRole('button', { name: 'DigiKey cart CSV (decide 1 line first)' })).toBeDisabled();
+  const fet = section(page, 'GONE-FET');
+  await fet.getByRole('button', { name: 'Skip this line' }).click();
+  await expect(page.getByText('Skipped by you')).toBeVisible();
+
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'DigiKey cart CSV (3)' }).click();
+  const csv = readFileSync(await (await download).path(), 'utf-8');
+  expect(csv).toContain('ICMINE-CT-ND,IC-MINE,2,U1');
+});
+
+test('lookup errors are shown on the line', async ({ page }) => {
+  await page.route('**/lookup', (route) =>
+    route.fulfill({ status: 404, json: { detail: 'Only DigiKey parts can go in the DigiKey cart.' } }),
+  );
+  await convert(page);
+  const ic = section(page, 'GONE-IC');
+  await ic.getByLabel('Replacement part').fill('https://www.mouser.com/x');
+  await ic.getByRole('button', { name: 'Check part' }).click();
+  await expect(ic.getByText('Only DigiKey parts can go in the DigiKey cart.')).toBeVisible();
+  await expect(ic.getByText('Undecided: not in the cart yet')).toBeVisible();
 });
 
 test('choosing, skipping and the cart CSV', async ({ page }) => {

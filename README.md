@@ -108,27 +108,29 @@ cd frontend && npm run test:e2e               # UI flow in Chrome with a mocked 
    Verdicts: **drop-in** (same package, every listed spec equal or better: picked automatically), **probably fine**
    (only minor specs worse, e.g. gate charge or Rds(on) gate-drive rating, or specs not listed), **worse spec**
    (says which, with both values), **different package**. The UI shows each candidate with photo, verdict, spec
-   comparison, DigiKey page and datasheet; the user picks one or skips the line. Undecided lines stay out of the cart.
+   comparison, DigiKey page and datasheet; the user picks one or skips the line.
+6. **Your own part** (`POST /lookup`): on any line that needs a decision, paste a DigiKey product link, DigiKey part
+   number or MPN. It gets the same spec check against the original (1-2 API calls). Non-DigiKey links are refused:
+   skip the line instead.
+7. **Cart lock:** the cart CSV can't be downloaded until every line is ordered or explicitly skipped. It is the only
+   download (the full Excel/CSV exports were removed 2026-11-10: nobody used them, and one file is harder to misuse).
 
 DigiKey allows ~1000 API calls/day for the app; a 30-line BOM takes ~60 calls (fewer when cached for 1 h).
 
 ## Schema/File Notes
 
-Columns appended to the converted BOM:
+Fields `/convert` adds to each BOM row (shown in the table):
 - `dk_mpn`, `dk_manufacturer` - the DigiKey product that was matched
 - `dkpn`, `dk_packaging`, `dk_qty_avail`, `dk_moq`, `dk_unit_price` - chosen DigiKey variation for the order quantity
 - `qty_per_board`, `order_qty` - BOM quantity and quantity x boards
 - `match_status` - `ok`, `marketplace`, `moq`, `low_stock`, `out_of_stock`, `ambiguous`, `not_found`, `not_a_part`, `error`
 - `match_note` - why, in words (e.g. lead time, which manufacturer was used)
 - `dk_search_url` - DigiKey search link for verification
-- in exports: `order_dkpn`, `order_mpn`, `order_manufacturer`, `substituted` - what will actually be ordered after
-  choosing alternatives
 
-Downloads:
+Download:
 - `[name]_digikey_cart_xN.csv` - `Digi-Key Part Number, Manufacturer Part Number, Quantity, Reference Designator`, only
   orderable lines. Upload it in the DigiKey cart ("Upload a File"): start at row 2, and set Column 4 to
   "Reference Designator" (DigiKey maps columns 1-3 itself but leaves 4 on "Skip"). Tested 2026-11-04: all lines accepted.
-- `[name]_digikey_bom_xN.xlsx` - full BOM + "DigiKey cart" + "Needs attention" sheets; `.csv` - full BOM only.
 
 Uploading a previously converted file works too: the appended columns are dropped and recomputed.
 

@@ -6,13 +6,15 @@ import {
   BACKEND_BASE,
   BOMItem,
   ConvertMeta,
+  Alternative,
+  MANUAL_SOURCE,
+  ORIGINAL,
   Selections,
   convertBOMViaBackend,
   defaultSelections,
   exportCartCSV,
-  exportToExcel,
-  exportToCSV,
   fetchAuthStatus,
+  undecidedLines,
 } from './utils/BOMConverter';
 import { Button } from './components/ui/button';
 import { RefreshCw, AlertCircle, Sparkles } from 'lucide-react';
@@ -106,19 +108,22 @@ function App() {
     setSelections((prev) => ({ ...prev, [index]: choice }));
   };
 
+  /** The user's own replacement replaces any earlier one for that line and is selected if it can be ordered. */
+  const handleManual = (index: number, alt: Alternative) => {
+    const others = bomData[index].alternatives.filter((a) => a.source !== MANUAL_SOURCE);
+    const manual = { ...alt, source: MANUAL_SOURCE };
+    setBomData((prev) => prev.map((item, i) => (i === index ? { ...item, alternatives: [...others, manual] } : item)));
+    // The manual pick is always last, so indices of the other alternatives don't move.
+    setSelections((prev) => {
+      const current = prev[index] ?? ORIGINAL;
+      const keep = current >= others.length ? ORIGINAL : current; // the previous manual pick is gone
+      return { ...prev, [index]: manual.orderable ? others.length : keep };
+    });
+  };
+
   const handleDownloadCart = () => {
-    if (bomData.length === 0) return;
+    if (bomData.length === 0 || undecidedLines(bomData, selections).length > 0) return;
     exportCartCSV(bomData, selections, `${exportBaseName}_digikey_cart_x${boards}.csv`);
-  };
-
-  const handleDownloadExcel = () => {
-    if (bomData.length === 0) return;
-    exportToExcel(bomData, selections, `${exportBaseName}_digikey_bom_x${boards}.xlsx`);
-  };
-
-  const handleDownloadCSV = () => {
-    if (bomData.length === 0) return;
-    exportToCSV(bomData, selections, `${exportBaseName}_digikey_bom_x${boards}.csv`);
   };
 
   const handleReset = () => {
@@ -224,9 +229,8 @@ function App() {
                 meta={meta}
                 selections={selections}
                 onSelect={handleSelect}
+                onManual={handleManual}
                 onDownloadCart={handleDownloadCart}
-                onDownloadExcel={handleDownloadExcel}
-                onDownloadCSV={handleDownloadCSV}
               />
 
               <div className="mt-8 flex justify-center">
@@ -251,7 +255,8 @@ function App() {
                 <li>
                   Review "Parts that can't be ordered as specified". Every in-stock candidate is compared spec by spec
                   with the original part (photo, datasheet and DigiKey link included). True drop-ins are picked
-                  automatically; for the rest, choose one or skip the line.
+                  automatically; for the rest, choose one, paste your own DigiKey link or part number (it gets the
+                  same spec check), or skip the line. The cart CSV unlocks once every line is decided.
                 </li>
                 <li>
                   Download the <span className="font-semibold">DigiKey cart CSV</span> and upload it in the DigiKey
@@ -263,17 +268,12 @@ function App() {
             </article>
 
             <article className="rounded-2xl border border-black/10 bg-white/80 p-6 shadow-[0_18px_40px_-30px_rgba(15,23,42,0.45)] backdrop-blur-sm">
-              <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">Downloads:</h3>
+              <h3 className="mb-4 text-2xl tracking-tight text-[#1c2029]">Download:</h3>
               <ul className="list-disc space-y-2 pl-5 text-[#41464f]">
                 <li>
                   <span className="font-semibold">DigiKey cart CSV</span>: Digi-Key Part Number, Manufacturer Part Number,
-                  Quantity (per board × boards), Reference Designator.
-                </li>
-                <li>
-                  <span className="font-semibold">Full Excel</span>: your BOM with DigiKey columns appended
-                  (<span className="font-mono">dkpn</span>, <span className="font-mono">match_status</span>,{' '}
-                  <span className="font-mono">order_qty</span>, chosen <span className="font-mono">order_dkpn</span>, ...),
-                  plus "DigiKey cart" and "Needs attention" sheets.
+                  Quantity (per board × boards), Reference Designator. Only
+                  unlocks once every line is ordered or skipped.
                 </li>
                 <li>
                   Packaging prefers Cut Tape, then Digi-Reel; full reels and DigiKey Marketplace sellers only when
