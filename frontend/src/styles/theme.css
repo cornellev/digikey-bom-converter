@@ -1,7 +1,9 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --font-size: 16px;
+  /* Everything is sized in rem, so this scales the whole page on wide screens (like browser zoom): 16px up to a
+     1280px-wide window, ~19px at 1920px, at most 22px. Phones and laptops are unchanged. */
+  --font-size: clamp(16px, calc(0.5vw + 9.6px), 22px);
   --background: #ececef;
   --foreground: #171a21;
   --card: #ffffff;

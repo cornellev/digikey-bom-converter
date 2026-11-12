@@ -40,13 +40,13 @@ export function FileUpload({ onFileSelect }: FileUploadProps) {
   }, [onFileSelect]);
 
   return (
-    <div className="w-full max-w-2xl mx-auto">
+    <div className="h-full w-full">
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={`
-          group relative overflow-hidden rounded-2xl border-2 border-dashed p-10 text-center transition-all md:p-12
+          group relative flex h-full flex-col justify-center overflow-hidden rounded-2xl border-2 border-dashed p-10 text-center transition-all md:p-12
           ${isDragging ? 'border-[#c91118] bg-[#fceff0]' : 'border-[#bfc3cb] bg-[#f8f8fa] hover:border-[#5a606c]'}
         `}
       >

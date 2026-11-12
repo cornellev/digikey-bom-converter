@@ -210,9 +210,11 @@ function App() {
           )}
 
           <section className="rounded-3xl border border-black/10 bg-white/90 p-6 shadow-[0_24px_60px_-34px_rgba(17,20,27,0.52)] backdrop-blur-sm md:p-8">
+            {/* Upload on the left, settings on the right on wide screens; stacked on narrow ones. */}
+            <div className="grid items-stretch gap-6 lg:grid-cols-2">
             <FileUpload onFileSelect={handleFileSelect} />
 
-            <div className="mx-auto mt-6 max-w-xl divide-y divide-black/10 rounded-2xl border border-black/10 bg-[#fafbfc] text-sm text-[#2b3039]">
+            <div className="divide-y divide-black/10 rounded-2xl border border-black/10 bg-[#fafbfc] text-sm text-[#2b3039]">
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <label htmlFor="boards" className="text-sm font-medium">Number of boards</label>
                 <input
@@ -273,6 +275,7 @@ function App() {
                   <p className="text-xs text-[#6b717c]">Saved in this browser.</p>
                 </div>
               </div>
+            </div>
             </div>
 
             {uploadedFile && bomData.length === 0 && (
