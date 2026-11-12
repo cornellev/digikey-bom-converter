@@ -172,4 +172,5 @@ def compare_parts(original: dict[str, Any], candidate: dict[str, Any]) -> dict[s
         summary = 'meets or beats every listed spec' + (
             ' (better: ' + ', '.join(short(r['name']) for r in better) + ')' if better else ''
         )
-    return {'verdict': verdict, 'summary': summary, 'specs': rows, 'worse_count': len(worse) + len(minor)}
+    return {'verdict': verdict, 'summary': summary, 'specs': rows, 'worse_count': len(worse) + len(minor),
+            'minor_count': len(minor)}

@@ -96,6 +96,59 @@ test('pasted replacement is spec-checked and used; cart unlocks once every line 
   expect(csv).toContain('ICMINE-CT-ND,IC-MINE,2,U1');
 });
 
+test('standard parts come from ELL stock and can be ordered anyway', async ({ page }) => {
+  const response = {
+    ...RESPONSE,
+    rows: [...RESPONSE.rows, row('C9, C10', 'C0603C104K5RACTU', 2, 'lab_stock', '', 'on the standard parts sheet, pull from ELL stock')],
+    alternatives: [...RESPONSE.alternatives, []],
+    cards: [...RESPONSE.cards, null],
+    standard_parts: { enabled: true, count: 38, error: null, url: 'https://docs.google.com/spreadsheets/d/x/edit', manual_count: 0 },
+  };
+  await page.route('**/auth/status', (route) => route.fulfill({ json: { configured: true, has_refresh_token: true } }));
+  await page.route('**/convert', (route) => route.fulfill({ json: response }));
+  await page.route('**/lookup', (route) =>
+    route.fulfill({ json: alternative('C0603C104K5RACTU', '399-C0603C104K5RACTUCT-ND', 'unverified') }),
+  );
+  await page.goto('');
+  await page.locator('input[type=file]').setInputFiles({ name: 'b.csv', mimeType: 'text/csv', buffer: Buffer.from('Name\nX\n') });
+  await page.locator('#boards').fill('2');
+  await page.getByRole('button', { name: 'Convert to DigiKey BOM' }).click();
+
+  await expect(page.getByText('1 from ELL stock')).toBeVisible();
+  await expect(page.getByText('38 standard parts')).toBeVisible();
+  // Lab-stock lines don't block the cart: only the two real undecided lines do.
+  await expect(page.getByRole('button', { name: 'DigiKey cart CSV (decide 2 lines first)' })).toBeDisabled();
+
+  const lab = page.getByTestId('lab-5');
+  await lab.getByRole('button', { name: 'Order from DigiKey anyway' }).click();
+  await expect(lab.getByText('Ordering 399-C0603C104K5RACTUCT-ND from DigiKey')).toBeVisible();
+  await expect(page.getByText('3 ready for the cart')).toBeVisible();
+  await lab.getByRole('button', { name: 'Use ELL stock instead' }).click();
+  await expect(page.getByText('2 ready for the cart')).toBeVisible();
+});
+
+test('ELL-stock settings are sent with the conversion and remembered', async ({ page }) => {
+  let body = '';
+  await page.route('**/auth/status', (route) => route.fulfill({ json: { configured: true, has_refresh_token: true } }));
+  await page.route('**/convert', (route) => {
+    body = route.request().postData() ?? '';
+    route.fulfill({ json: RESPONSE });
+  });
+  await page.goto('');
+  await page.getByLabel(/standard parts sheet/).uncheck();
+  await page.getByLabel(/Also in the ELL/).fill('GRM188R71H104KA93D\nPMEG2010ER,115');
+  await expect(page.getByText(/Also in the ELL \(2\)/)).toBeVisible();
+  await page.locator('input[type=file]').setInputFiles({ name: 'b.csv', mimeType: 'text/csv', buffer: Buffer.from('Name\nX\n') });
+  await page.getByRole('button', { name: 'Convert to DigiKey BOM' }).click();
+  await expect(page.getByRole('heading', { name: /DigiKey BOM for/ })).toBeVisible();
+  expect(body).toMatch(/name="use_standard_sheet"\r\n\r\nfalse/);
+  expect(body).toMatch(/GRM188R71H104KA93D\r?\nPMEG2010ER,115/); // the browser sends CRLF; the backend splits either
+
+  await page.reload();
+  await expect(page.getByLabel(/Also in the ELL/)).toHaveValue('GRM188R71H104KA93D\nPMEG2010ER,115');
+  await expect(page.getByLabel(/standard parts sheet/)).not.toBeChecked();
+});
+
 test('lookup errors are shown on the line', async ({ page }) => {
   await page.route('**/lookup', (route) =>
     route.fulfill({ status: 404, json: { detail: 'Only DigiKey parts can go in the DigiKey cart.' } }),

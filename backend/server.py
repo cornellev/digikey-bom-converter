@@ -52,6 +52,8 @@ async def convert(
     workers: int = Form(default=4),
     boards: int = Form(default=1),
     alternatives: bool = Form(default=True),
+    use_standard_sheet: bool = Form(default=True),
+    lab_parts: str = Form(default=''),
 ) -> dict:
     try:
         payload = await file.read()
@@ -63,6 +65,8 @@ async def convert(
             workers=workers,
             boards=boards,
             with_alternatives=alternatives,
+            use_standard_sheet=use_standard_sheet,
+            lab_parts=lab_parts,
         )
         return {'rows': rows, 'alternatives': row_alternatives, **meta}
     except QuotaExceeded as exc:

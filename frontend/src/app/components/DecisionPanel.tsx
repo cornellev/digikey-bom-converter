@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, ExternalLink, FileText, ImageOff, RefreshCw } from 'lucide-react';
+import { Ban, CheckCircle2, ExternalLink, FileText, ImageOff, RefreshCw, ShoppingCart } from 'lucide-react';
 import {
   Alternative,
   BOMItem,
@@ -9,6 +9,7 @@ import {
   Selections,
   Verdict,
   lookupReplacement,
+  fromLabStock,
   needsDecision,
 } from '../utils/BOMConverter';
 
@@ -295,6 +296,119 @@ export function DecisionPanel({ data, selections, onSelect, onManual }: Decision
           </section>
         );
       })}
+    </div>
+  );
+}
+
+/** Whether a line goes into the DigiKey cart CSV. ELL-stock lines are "Not in cart" unless ordered anyway. */
+export function CartBadge({ inCart, label }: { inCart: boolean; label?: string }) {
+  return inCart ? (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+      <ShoppingCart className="h-3 w-3" /> {label ?? 'In cart'}
+    </span>
+  ) : (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
+      <Ban className="h-3 w-3" /> {label ?? 'Not in cart'}
+    </span>
+  );
+}
+
+interface LabStockPanelProps {
+  data: BOMItem[];
+  selections: Selections;
+  onSelect: (index: number, choice: number) => void;
+  onManual: (index: number, alt: Alternative) => void;
+}
+
+/** Lines using parts the team keeps in the ELL: pulled from stock, out of the cart unless ordered anyway. */
+export function LabStockPanel({ data, selections, onSelect, onManual }: LabStockPanelProps) {
+  const lines = data.map((item, index) => ({ item, index })).filter(({ item }) => item.status === 'lab_stock');
+  const [busy, setBusy] = useState<number | null>(null);
+  const [errors, setErrors] = useState<Record<number, string>>({});
+  if (lines.length === 0) return null;
+  const orderedCount = lines.filter(({ item, index }) => !fromLabStock(item, selections[index])).length;
+  const notInCart = lines.length - orderedCount;
+
+  const orderAnyway = async (index: number, item: BOMItem) => {
+    setBusy(index);
+    setErrors((prev) => ({ ...prev, [index]: '' }));
+    try {
+      const alt = await lookupReplacement(item.mpn, item);
+      if (!alt.orderable) {
+        setErrors((prev) => ({ ...prev, [index]: `DigiKey can't supply ${item.orderQty} right now (${alt.stock} in stock).` }));
+      } else {
+        onManual(index, alt);
+      }
+    } catch (err) {
+      setErrors((prev) => ({ ...prev, [index]: err instanceof Error ? err.message : 'Lookup failed.' }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-2xl tracking-tight text-[#1b1f27]">From ELL stock ({lines.length})</h2>
+          {notInCart > 0 && <CartBadge inCart={false} label={`${notInCart} not in cart`} />}
+          {orderedCount > 0 && <CartBadge inCart label={`${orderedCount} ordered from DigiKey`} />}
+        </div>
+        <p className="mt-1 text-sm text-[#4b515c]">
+          Parts the team keeps in the ELL (standard parts sheet or your list).{' '}
+          <b>These are not in the DigiKey cart.</b> If the ELL is out of one, click "Order
+          from DigiKey anyway" to add that line to the cart.
+        </p>
+      </div>
+      <div className="overflow-hidden rounded-2xl border border-black/10">
+        {lines.map(({ item, index }) => {
+          const selection = selections[index];
+          const ordered = !fromLabStock(item, selection) ? item.alternatives[selection] : undefined;
+          return (
+            <div
+              key={index}
+              data-testid={`lab-${index}`}
+              className={`flex flex-wrap items-center justify-between gap-3 border-b border-l-4 border-b-black/5 px-4 py-2.5 text-sm last:border-b-0 ${
+                ordered ? 'border-l-emerald-500 bg-emerald-50/60' : 'border-l-slate-300 bg-[#f6f7f9]'
+              }`}
+            >
+              <div className="min-w-0">
+                <span className="font-semibold">{item.designators || `Line ${index + 1}`}</span>
+                <span className="mx-2 text-[#a3a8b1]">·</span>
+                <span className="font-mono">{item.mpn}</span>
+                <span className="mx-2 text-[#a3a8b1]">·</span>
+                need {item.orderQty}
+                <div className="text-xs text-[#5b616c]">
+                  {ordered ? `Ordering ${ordered.dkpn} from DigiKey` : item.note}
+                </div>
+                {errors[index] && <div className="text-xs text-red-700">{errors[index]}</div>}
+              </div>
+              <div className="flex items-center gap-2">
+              <CartBadge inCart={Boolean(ordered)} />
+              {ordered ? (
+                <button
+                  type="button"
+                  onClick={() => onSelect(index, ORIGINAL)}
+                  className="rounded-full border border-black/20 bg-white px-3 py-1 text-xs hover:bg-[#efeff2]"
+                >
+                  Use ELL stock instead
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy === index}
+                  onClick={() => orderAnyway(index, item)}
+                  className="inline-flex items-center gap-1 rounded-full border border-black/20 bg-white px-3 py-1 text-xs hover:bg-[#efeff2] disabled:text-[#a3a8b1]"
+                >
+                  {busy === index && <RefreshCw className="h-3 w-3 animate-spin" />}
+                  Order from DigiKey anyway
+                </button>
+              )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

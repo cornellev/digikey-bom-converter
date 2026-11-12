@@ -18,14 +18,34 @@ import {
 } from './utils/BOMConverter';
 import { Button } from './components/ui/button';
 import { RefreshCw, AlertCircle, Sparkles } from 'lucide-react';
+import { CartBadge } from './components/DecisionPanel';
 import { Alert, AlertDescription } from './components/ui/alert';
 import logoDark from '../assets/images/fulldark.png';
+
+// Remembered per browser so people don't retype their lab-stock list; storage can be unavailable (private mode).
+function readSetting(key: string): string | null {
+  try {
+    return window.localStorage.getItem(`bom.${key}`);
+  } catch {
+    return null;
+  }
+}
+
+function saveSetting(key: string, value: string) {
+  try {
+    window.localStorage.setItem(`bom.${key}`, value);
+  } catch {
+    // not saved; the setting still applies to this visit
+  }
+}
 
 function App() {
   const [bomData, setBomData] = useState<BOMItem[]>([]);
   const [meta, setMeta] = useState<ConvertMeta | null>(null);
   const [selections, setSelections] = useState<Selections>({});
   const [boards, setBoards] = useState(1);
+  const [useStandardSheet, setUseStandardSheet] = useState(() => readSetting('useStandardSheet') !== 'false');
+  const [labParts, setLabParts] = useState(() => readSetting('labParts') ?? '');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -71,6 +91,20 @@ function App() {
     clearResults(); // quantities change which packaging and alternatives are valid, so re-run
   };
 
+  const handleUseStandardSheet = (value: boolean) => {
+    setUseStandardSheet(value);
+    saveSetting('useStandardSheet', String(value));
+    clearResults();
+  };
+
+  const handleLabParts = (value: string) => {
+    setLabParts(value);
+    saveSetting('labParts', value);
+    clearResults();
+  };
+
+  const labCount = labParts.split('\n').filter((line) => line.trim()).length;
+
   const handleConvert = async () => {
     if (!uploadedFile) return;
 
@@ -88,7 +122,7 @@ function App() {
     setError(null);
 
     try {
-      const { items, meta: convertMeta } = await convertBOMViaBackend(uploadedFile, boards);
+      const { items, meta: convertMeta } = await convertBOMViaBackend(uploadedFile, boards, { useStandardSheet, labParts });
       if (items.length === 0) {
         throw new Error('No data found in the uploaded file.');
       }
@@ -178,17 +212,67 @@ function App() {
           <section className="rounded-3xl border border-black/10 bg-white/90 p-6 shadow-[0_24px_60px_-34px_rgba(17,20,27,0.52)] backdrop-blur-sm md:p-8">
             <FileUpload onFileSelect={handleFileSelect} />
 
-            <div className="mt-6 flex items-center justify-center gap-3 text-[#2b3039]">
-              <label htmlFor="boards" className="text-sm">Number of boards</label>
-              <input
-                id="boards"
-                type="number"
-                min={1}
-                max={1000}
-                value={boards}
-                onChange={(e) => handleBoardsChange(e.target.value)}
-                className="w-24 rounded-full border border-black/20 bg-white px-4 py-1.5 text-center text-sm"
-              />
+            <div className="mx-auto mt-6 max-w-xl divide-y divide-black/10 rounded-2xl border border-black/10 bg-[#fafbfc] text-sm text-[#2b3039]">
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <label htmlFor="boards" className="text-sm font-medium">Number of boards</label>
+                <input
+                  id="boards"
+                  type="number"
+                  min={1}
+                  max={1000}
+                  value={boards}
+                  onChange={(e) => handleBoardsChange(e.target.value)}
+                  className="w-24 rounded-full border border-black/20 bg-white px-4 py-1.5 text-center text-sm"
+                />
+              </div>
+
+              <div className="space-y-3 px-4 py-3">
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-medium">Parts already in the ELL</div>
+                    <CartBadge inCart={false} label="Not added to cart" />
+                  </div>
+                  <p className="mt-1 text-xs text-[#6b717c]">
+                    Matching lines are <b className="text-[#2b3039]">not put in the DigiKey cart</b>. They're listed
+                    under "From ELL stock", where you can still order any of them.
+                  </p>
+                </div>
+                <label className="flex items-start gap-2 text-sm font-normal">
+                  <input
+                    type="checkbox"
+                    checked={useStandardSheet}
+                    onChange={(e) => handleUseStandardSheet(e.target.checked)}
+                    className="mt-0.5 accent-[#c91118]"
+                  />
+                  <span>
+                    Parts on elec's{' '}
+                    <a
+                      href="https://docs.google.com/spreadsheets/d/1Cu6EPDHoVM6xf87pxzi4HhAb9UjkhsmBFUes17s5fYU/edit"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline"
+                    >
+                      standard parts sheet
+                    </a>{' '}
+                    (bought in bulk)
+                  </span>
+                </label>
+                <div>
+                  <label htmlFor="lab-parts" className="block text-sm font-normal">
+                    Also in the ELL{labCount ? ` (${labCount})` : ''}: one per line, as a part number, DigiKey part
+                    number or DigiKey link
+                  </label>
+                  <textarea
+                    id="lab-parts"
+                    value={labParts}
+                    onChange={(e) => handleLabParts(e.target.value)}
+                    rows={3}
+                    placeholder={'GRM188R71H104KA93D\n296-LMR38010FDDARCT-ND\nhttps://www.digikey.com/en/products/detail/...'}
+                    className="mt-1 w-full rounded-xl border border-black/20 bg-white px-3 py-2 font-mono text-xs"
+                  />
+                  <p className="text-xs text-[#6b717c]">Saved in this browser.</p>
+                </div>
+              </div>
             </div>
 
             {uploadedFile && bomData.length === 0 && (

@@ -17,10 +17,11 @@ import {
   Selections,
   cartLines,
   chosenPart,
+  fromLabStock,
   needsDecision,
   undecidedLines,
 } from '../utils/BOMConverter';
-import { DecisionPanel, VERDICT_STYLE } from './DecisionPanel';
+import { CartBadge, DecisionPanel, LabStockPanel, VERDICT_STYLE } from './DecisionPanel';
 
 interface BOMTableProps {
   data: BOMItem[];
@@ -41,6 +42,7 @@ const STATUS_LABEL: Record<MatchStatus, { label: string; className: string }> = 
   not_found: { label: 'Not found', className: 'bg-red-100 text-red-800' },
   error: { label: 'Lookup error', className: 'bg-red-100 text-red-800' },
   not_a_part: { label: 'Skipped (not a part)', className: 'bg-slate-100 text-slate-600' },
+  lab_stock: { label: 'From ELL stock', className: 'bg-sky-100 text-sky-800' },
 };
 
 function price(value: number | null): string {
@@ -61,7 +63,8 @@ export function BOMTable({
 
   const parts = data.map((item, index) => chosenPart(item, selections[index]));
   const ready = parts.filter((p) => p?.orderable).length;
-  const skipped = parts.filter((p) => p === null).length;
+  const fromLab = data.filter((item, index) => fromLabStock(item, selections[index])).length;
+  const skipped = parts.filter((p) => p === null).length - fromLab;
   const undecided = undecidedLines(data, selections);
   const attention = undecided.length;
   const substituted = parts.filter((p) => p?.orderable && p.substituted).length;
@@ -100,6 +103,20 @@ export function BOMTable({
             {attention} undecided (not in cart)
           </a>
         )}
+        {fromLab > 0 && (
+          <a href="#lab-stock" className="rounded-full bg-sky-100 px-3 py-1 text-sky-800 hover:underline">{fromLab} from ELL stock</a>
+        )}
+        {meta.standard_parts?.manual_unrecognized?.length ? (
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-800">
+            Not used from your ELL list (not a part number or DigiKey link):{' '}
+            {meta.standard_parts.manual_unrecognized.join(', ')}
+          </span>
+        ) : null}
+        {meta.standard_parts?.error && (
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-800">
+            Couldn't read the standard parts list ({meta.standard_parts.error}); every line was looked up on DigiKey
+          </span>
+        )}
         {skipped > 0 && <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">{skipped} skipped</span>}
         <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">≈ {price(total)} at listed prices</span>
         {meta.api_rate_remaining !== null && meta.api_rate_remaining < 150 && (
@@ -116,6 +133,10 @@ export function BOMTable({
           onSelect={onSelect}
           onManual={onManual}
         />
+      </div>
+
+      <div id="lab-stock">
+        <LabStockPanel data={data} selections={selections} onSelect={onSelect} onManual={onManual} />
       </div>
 
       <h2 className="pt-2 text-2xl tracking-tight text-[#1b1f27]">Full BOM</h2>
@@ -185,6 +206,11 @@ export function BOMTable({
                     <TableCell className="whitespace-normal px-3 py-3 text-sm text-[#353b45]">
                       <span className={`rounded-full px-2 py-0.5 text-xs ${status.className}`}>{status.label}</span>
                       {item.note && <div className="mt-1 text-xs text-[#5b616c]">{item.note}</div>}
+                      {item.status === 'lab_stock' && (
+                        <div className="mt-1">
+                          <CartBadge inCart={Boolean(part?.orderable)} label={part?.orderable ? 'In cart (ordered anyway)' : undefined} />
+                        </div>
+                      )}
                       {needsDecision(item) && (
                         <div className="mt-1 text-xs">
                           {selection === SKIP ? (
@@ -218,6 +244,15 @@ export function BOMTable({
         {meta.part_number_column ? ` (fallback "${meta.part_number_column}")` : ''}, quantities from{' '}
         {meta.qty_column ? `"${meta.qty_column}"` : 'designator counts'} · {meta.api_calls} DigiKey API calls
         {meta.api_rate_remaining !== null ? `, ${meta.api_rate_remaining} left in DigiKey quota` : ''}
+        {meta.standard_parts?.enabled && !meta.standard_parts.error && (
+          <>
+            {' · '}
+            <a href={meta.standard_parts.url} target="_blank" rel="noreferrer" className="underline">
+              {meta.standard_parts.count} standard parts
+            </a>
+          </>
+        )}
+        {meta.standard_parts?.manual_count ? ` · ${meta.standard_parts.manual_count} on your ELL list` : ''}
       </div>
     </div>
   );

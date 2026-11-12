@@ -8,7 +8,14 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from alternatives import find_alternatives, manual_replacement, product_card, suggest_for_unmatched
+from alternatives import (
+    ManualLookupError,
+    find_alternatives,
+    manual_replacement,
+    parse_part_query,
+    product_card,
+    suggest_for_unmatched,
+)
 from auth_service import ensure_valid_access_token, get_client_id
 from digikey_client import (
     V4_BASE,
@@ -25,6 +32,7 @@ from digikey_client import (
     pick_variation,
 )
 from storage import load_cache, save_cache
+import standard_parts
 
 # Statuses that keep a row out of the DigiKey cart file until someone picks a replacement.
 BLOCKING_STATUSES = {'out_of_stock', 'low_stock', 'moq', 'ambiguous', 'not_found', 'error'}
@@ -211,13 +219,23 @@ def process_line(line: dict[str, Any], need: int, dk: DigiKeyV4, with_alternativ
         out['match_note'] = 'board feature, not purchasable' if line['non_part'] else 'no part number in this row'
         return out
 
+    standard = standard_parts.match([mpn for mpn, _ in candidates], line.get('standard_parts') or [])
+    if standard:
+        # Bought in bulk and kept in the ELL: no DigiKey lookup (the UI can still order it on request).
+        out['match_status'] = 'lab_stock'
+        out['dk_mpn'] = standard['mpn']
+        where = 'on the standard parts sheet' if standard.get('source') == 'sheet' else 'on your ELL list'
+        out['match_note'] = f'{where}, pull from ELL stock' + (f' ({standard["note"]})' if standard['note'] else '')
+        out['dk_search_url'] = build_dk_search_url(standard['mpn'])
+        return out
+
     try:
         product, how, note = resolve_product(candidates, dk)
         if not product:
             out['match_status'] = how
             out['match_note'] = note
             if with_alternatives:
-                out['alternatives'] = suggest_for_unmatched(candidates, need, dk)
+                out['alternatives'] = suggest_for_unmatched(candidates, need, dk, line.get('description', ''))
             return out
 
         variation, status = pick_variation(product, need)
@@ -253,6 +271,29 @@ def process_line(line: dict[str, Any], need: int, dk: DigiKeyV4, with_alternativ
         return out
 
 
+def resolve_manual_entries(
+    entries: list[dict[str, str]], dk: DigiKeyV4
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Turn the user's ELL list into MPNs. DigiKey links give the MPN directly; DigiKey part numbers ("...-ND") cost
+    one lookup each. Returns (parts, entries that couldn't be used)."""
+    parts, unrecognized = [], []
+    for entry in entries:
+        raw = entry['mpn']
+        try:
+            pn = parse_part_query(raw)
+        except ManualLookupError:  # a non-DigiKey link, or a DigiKey link that isn't a product page
+            unrecognized.append(raw)
+            continue
+        if pn.upper().endswith('-ND'):
+            product = lookup_product(dk, pn)
+            if not product:
+                unrecognized.append(raw)
+                continue
+            pn = product.get('ManufacturerProductNumber', pn)
+        parts.append({**entry, 'mpn': pn})
+    return parts, unrecognized
+
+
 def _build_dk_client(access_token: str, cache: Optional[dict[str, Any]] = None) -> DigiKeyV4:
     return DigiKeyV4(
         client_id=get_client_id(),
@@ -274,6 +315,8 @@ def convert_uploaded_bom(
     workers: int = 4,
     boards: int = 1,
     with_alternatives: bool = True,
+    use_standard_sheet: bool = True,
+    lab_parts: str = '',
 ) -> tuple[list[dict[str, Any]], list[list[dict[str, Any]]], dict[str, Any]]:
     """Convert a BOM. Returns (rows, alternatives per row, meta)."""
     frame, selected_sheet = parse_uploaded_bom(payload=payload, filename=filename, sheet=sheet)
@@ -303,11 +346,18 @@ def convert_uploaded_bom(
             'qty': parse_qty(row[qty_col] if qty_col else '', row[ref_col] if ref_col else ''),
             'candidates': [] if non_part else mpn_candidates(name, part_number, manufacturer),
             'non_part': non_part,
+            'description': str(description or '').strip(),
         })
 
     access_token = ensure_valid_access_token()
     cache = load_cache()
     dk = _build_dk_client(access_token, cache)
+
+    # ELL stock: elec's standard parts sheet, the user's own list, or both. Manual entries match first.
+    standard = standard_parts.load() if use_standard_sheet else {'parts': [], 'error': None, 'url': ''}
+    manual, unrecognized = resolve_manual_entries(standard_parts.parse_manual(lab_parts), dk)
+    for line in lines:
+        line['standard_parts'] = manual + standard['parts']
 
     max_workers = max(1, min(int(workers), 8))
     try:
@@ -342,6 +392,10 @@ def convert_uploaded_bom(
         'api_rate_remaining': dk.rate_remaining,
     }
     meta['cards'] = cards
+    meta['standard_parts'] = {
+        'enabled': use_standard_sheet, 'count': len(standard['parts']), 'error': standard['error'],
+        'url': standard['url'], 'manual_count': len(manual), 'manual_unrecognized': unrecognized,
+    }
     return rows, alternatives, meta
 
 

@@ -16,6 +16,7 @@ export type MatchStatus =
   | 'ambiguous'
   | 'not_found'
   | 'not_a_part'
+  | 'lab_stock'
   | 'error';
 
 /** Lines with these statuses can go straight into the DigiKey cart. */
@@ -94,6 +95,16 @@ export interface ConvertMeta {
   api_calls: number;
   api_rate_remaining: number | null;
   cards: (ProductCard | null)[];
+  /** Elec's standardized (bulk-stocked) parts sheet: how many parts it lists, or why it couldn't be read. */
+  standard_parts?: {
+    enabled: boolean;
+    count: number;
+    error: string | null;
+    url: string;
+    manual_count: number;
+    /** ELL-list entries that couldn't be turned into a part number (e.g. a Mouser link). */
+    manual_unrecognized?: string[];
+  };
 }
 
 /** Choice per line: index into item.alternatives, ORIGINAL (keep the BOM part) or SKIP (leave the line out). */
@@ -149,13 +160,22 @@ export async function fetchAuthStatus(): Promise<AuthStatus> {
   return response.json();
 }
 
+/** Where ELL-stock parts come from: elec's standard parts sheet and/or the user's own list (one per line). */
+export interface LabStockOptions {
+  useStandardSheet: boolean;
+  labParts: string;
+}
+
 export async function convertBOMViaBackend(
   file: File,
   boards: number,
+  lab: LabStockOptions = { useStandardSheet: true, labParts: '' },
 ): Promise<{ items: BOMItem[]; meta: ConvertMeta }> {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('boards', String(boards));
+  formData.append('use_standard_sheet', String(lab.useStandardSheet));
+  formData.append('lab_parts', lab.labParts);
 
   const response = await fetch(`${BACKEND_BASE}/convert`, {
     method: 'POST',
@@ -209,11 +229,17 @@ export interface ChosenPart {
 
 /** Lines that can't be ordered as the BOM specifies; these need an alternative or a decision to skip. */
 export function needsDecision(item: BOMItem): boolean {
-  return item.status !== 'not_a_part' && !(ORDERABLE_STATUSES.includes(item.status) && item.dkpn);
+  if (item.status === 'not_a_part' || item.status === 'lab_stock') return false;
+  return !(ORDERABLE_STATUSES.includes(item.status) && item.dkpn);
+}
+
+/** Standard part from the ELL, not ordered unless the user chose "Order from DigiKey anyway". */
+export function fromLabStock(item: BOMItem, selection: number | undefined): boolean {
+  return item.status === 'lab_stock' && !(selection !== undefined && selection >= 0 && item.alternatives[selection]);
 }
 
 export function chosenPart(item: BOMItem, selection: number | undefined): ChosenPart | null {
-  if (item.status === 'not_a_part' || selection === SKIP) return null;
+  if (item.status === 'not_a_part' || selection === SKIP || fromLabStock(item, selection)) return null;
   const alt = selection !== undefined && selection >= 0 ? item.alternatives[selection] : undefined;
   if (alt) {
     return {
@@ -252,7 +278,8 @@ export function defaultSelections(items: BOMItem[]): Selections {
   const selections: Selections = {};
   items.forEach((item, index) => {
     if (!needsDecision(item)) return;
-    const pick = item.alternatives.findIndex((alt) => alt.orderable && alt.verdict === 'drop_in');
+    // Never auto-pick a marketplace seller: elec's PCB rules say no marketplace parts.
+    const pick = item.alternatives.findIndex((alt) => alt.orderable && alt.verdict === 'drop_in' && alt.status !== 'marketplace');
     if (pick >= 0) selections[index] = pick;
   });
   return selections;

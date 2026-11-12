@@ -167,3 +167,56 @@ def test_parse_part_query_accepts_links_part_numbers_and_rejects_other_sites():
     for bad in ('https://www.mouser.com/ProductDetail/71-CRCW060310K0FKEA', 'https://www.digikey.com/en/products', ''):
         with pytest.raises(ManualLookupError):
             parse_part_query(bad)
+
+
+SHEET_CSV = '''Component,Note,Package,Tape/Reel W,PNP Slot
+CEVPico,,,,
+RC0603FR-0710KL,10k Ohm Res 1%,0603,8mm,
+RESISTORS,,,,
+LMR38020,80V 2A Buck IC,8-SOIC,12mm,
+"PMEG2010ER,115",Schotty Diode 20V 1A,SOD-123W,8mm,
+PTS810SJG250SMTR LFS,Tactile Switch,,12mm,
+25 8mms,,,,
+'''
+
+
+def test_standard_parts_sheet_skips_headings_and_matches_exact_or_partial_part_numbers():
+    from standard_parts import match, parse_sheet
+
+    parts = parse_sheet(SHEET_CSV)
+    assert [p['mpn'] for p in parts] == ['RC0603FR-0710KL', 'LMR38020', 'PMEG2010ER,115', 'PTS810SJG250SMTR LFS']
+    assert match(['rc0603fr-0710kl'], parts)['note'] == '10k Ohm Res 1%'
+    assert match(['LMR38020SDDAR'], parts)['mpn'] == 'LMR38020'  # sheet lists the base part
+    assert match(['PTS810SJG250SMTRLFS'], parts)  # spacing differs
+    assert match(['PMEG2010ER,115'], parts)
+    assert match(['RC0603FR-0710K0L', 'LMR3802'], parts) is None
+
+
+def test_manual_lab_list_is_one_part_per_line_and_keeps_commas():
+    from standard_parts import match, parse_manual
+
+    parts = parse_manual('GRM188R71H104KA93D\n\n  PMEG2010ER,115  \n')
+    assert [p['mpn'] for p in parts] == ['GRM188R71H104KA93D', 'PMEG2010ER,115']
+    assert match(['GRM188R71H104KA93D'], parts)['source'] == 'manual'
+
+
+def test_ell_list_accepts_digikey_links_and_part_numbers():
+    from bom_service import resolve_manual_entries
+    from standard_parts import parse_manual
+
+    class FakeDK:
+        def productdetails_by_mpn(self, pn, manufacturer_id=None):
+            if pn == '296-LMR38010FDDARCT-ND':
+                return {'Product': {'ManufacturerProductNumber': 'LMR38010FDDAR'}}
+            return {'__not_found__': True}
+
+    text = '\n'.join([
+        'GRM188R71H104KA93D',
+        '296-LMR38010FDDARCT-ND',
+        'https://www.digikey.com/en/products/detail/yageo/RC0603FR-0710KL/727212',
+        'https://www.mouser.com/ProductDetail/81-GRM188R71H104KA3D',
+        'BOGUS-ND',
+    ])
+    parts, unrecognized = resolve_manual_entries(parse_manual(text), FakeDK())
+    assert [p['mpn'] for p in parts] == ['GRM188R71H104KA93D', 'LMR38010FDDAR', 'RC0603FR-0710KL']
+    assert unrecognized == ['https://www.mouser.com/ProductDetail/81-GRM188R71H104KA3D', 'BOGUS-ND']

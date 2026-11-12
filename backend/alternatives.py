@@ -90,7 +90,7 @@ def _alternative(
         judgement = compare_parts(original, product)
     else:
         judgement = {'verdict': 'unverified', 'summary': 'no original part to compare against', 'specs': [],
-                     'worse_count': 0}
+                     'worse_count': 0, 'minor_count': 0}
     return {
         **product_card(product),
         'dkpn': variation['dkpn'],
@@ -105,6 +105,7 @@ def _alternative(
         'detail': judgement['summary'],
         'specs': judgement['specs'],
         'worse_count': judgement['worse_count'],
+        'minor_count': judgement['minor_count'],
         'review': judgement['verdict'] != 'drop_in',
     }
 
@@ -215,11 +216,13 @@ def _dedupe(alts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _rank(alts: list[dict[str, Any]], original_manufacturer: str = '') -> list[dict[str, Any]]:
-    """Best first: orderable, verdict, fewest worse specs, same manufacturer as the original, DigiKey seller over
-    marketplace, then price."""
+    """Best first: orderable, DigiKey seller over marketplace (elec's PCB rules say no marketplace parts), verdict,
+    fewest major specs worse, then fewest minor ones (a 0.05 mm taller part beats a worse tempco), same manufacturer
+    as the original, then price."""
     return sorted(_dedupe(alts), key=lambda a: (
-        not a['orderable'], VERDICT_RANK.get(a['verdict'], 9), a['worse_count'],
-        a['manufacturer'] != original_manufacturer, a['status'] == 'marketplace', a['unit_price'] or 1e9,
+        not a['orderable'], a['status'] == 'marketplace', VERDICT_RANK.get(a['verdict'], 9),
+        a['worse_count'] - a.get('minor_count', 0), a.get('minor_count', 0),
+        a['manufacturer'] != original_manufacturer, a['unit_price'] or 1e9,
     ))
 
 
@@ -241,20 +244,47 @@ def find_alternatives(product: dict[str, Any], need: int, dk: DigiKeyV4) -> list
     return _rank(alts, (product.get('Manufacturer') or {}).get('Name', ''))[:MAX_ALTERNATIVES]
 
 
-def suggest_for_unmatched(candidates: list[tuple[str, str]], need: int, dk: DigiKeyV4) -> list[dict[str, Any]]:
-    """Closest DigiKey products for a BOM line with no unique match (ambiguous or unknown part number)."""
+def _fix_mojibake(text: str) -> str:
+    """UTF-8 read as Windows-1252 somewhere along the way: "100 Âµ" -> "100 µ"."""
+    if 'Â' in text or 'Ã' in text:
+        try:
+            return text.encode('cp1252').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return text.replace('Â', '')
+    return text
+
+
+UNMATCHED_SOURCE_RANK = {'same part number, other manufacturer': 0, 'description match': 1, 'keyword match': 2}
+
+
+def suggest_for_unmatched(
+    candidates: list[tuple[str, str]], need: int, dk: DigiKeyV4, description: str = ''
+) -> list[dict[str, Any]]:
+    """Closest DigiKey products for a BOM line with no unique match (ambiguous or unknown part number).
+
+    The line's description is searched too: when the "part number" is just a value ("100uF"), the description
+    ("100 µF ±20% 25V Ceramic Capacitor X7R ...") is what finds the intended part.
+    """
     alts: list[dict[str, Any]] = []
-    for mpn, _ in candidates[:2]:
-        found = dk.keyword_search(mpn, limit=10)
+    searches = [(mpn, False) for mpn, _ in candidates[:2]]
+    description = _fix_mojibake(description).strip()
+    if description:
+        searches.append((description[:120], True))
+    for query, is_description in searches:
+        found = dk.keyword_search(query, limit=10)
         for candidate in merge_listings(found.get('Products') or []):
-            exact = (candidate.get('ManufacturerProductNumber') or '').lower() == mpn.lower()
-            alt = _alternative(candidate, need, 'same part number, other manufacturer' if exact else 'keyword match')
+            exact = not is_description and (candidate.get('ManufacturerProductNumber') or '').lower() == query.lower()
+            source = 'same part number, other manufacturer' if exact else (
+                'description match' if is_description else 'keyword match')
+            alt = _alternative(candidate, need, source)
             if alt:
                 if exact:
                     alt['detail'] = 'same part number from another manufacturer; confirm it is the part you meant'
+                elif is_description:
+                    alt['detail'] = 'matches the BOM description; check it is the part you meant'
                 alts.append(alt)
     alts = _dedupe(alts)
-    alts.sort(key=lambda a: (not a['orderable'], a['source'] != 'same part number, other manufacturer'))
+    alts.sort(key=lambda a: (not a['orderable'], UNMATCHED_SOURCE_RANK.get(a['source'], 9)))
     return alts[:MAX_ALTERNATIVES]
 
 

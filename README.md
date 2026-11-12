@@ -112,7 +112,16 @@ cd frontend && npm run test:e2e               # UI flow in Chrome with a mocked 
 6. **Your own part** (`POST /lookup`): on any line that needs a decision, paste a DigiKey product link, DigiKey part
    number or MPN. It gets the same spec check against the original (1-2 API calls). Non-DigiKey links are refused:
    skip the line instead.
-7. **Cart lock:** the cart CSV can't be downloaded until every line is ordered or explicitly skipped. It is the only
+7. **ELL stock** (`backend/standard_parts.py`): lines whose part number is on elec's
+   [Standardized Components sheet](https://docs.google.com/spreadsheets/d/1Cu6EPDHoVM6xf87pxzi4HhAb9UjkhsmBFUes17s5fYU/edit)
+   (bulk-bought, pick & place; linked from Confluence "PCB Ordering & Requirements") and/or on the user's own list
+   (one per line: MPN, DigiKey part number or DigiKey link; saved in the browser) are marked "From ELL stock": no DigiKey lookup, out of the cart,
+   with an "Order from DigiKey anyway" button. Partial sheet entries match by prefix (`LMR38020` -> `LMR38020SDDAR`).
+   The sheet is read hourly with the `bom-sheet-reader` service account (project `cev-tern`), which can see only that
+   sheet. Key: Render secret file `google-sa.json` (`/etc/secrets/google-sa.json`); locally
+   `backend/.runtime/google-sa.json`; or `GOOGLE_SA_FILE`. Other sheet: `STANDARD_PARTS_SHEET_ID`. If the sheet
+   can't be read, the UI says so and every line is looked up on DigiKey as usual.
+8. **Cart lock:** the cart CSV can't be downloaded until every line is ordered or explicitly skipped. It is the only
    download (the full Excel/CSV exports were removed 2026-11-10: nobody used them, and one file is harder to misuse).
 
 DigiKey allows ~1000 API calls/day for the app; a 30-line BOM takes ~60 calls (fewer when cached for 1 h).
